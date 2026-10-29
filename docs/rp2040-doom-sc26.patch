@@ -1,0 +1,1274 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index a752924..d453274 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -566,7 +566,7 @@ function(add_doom_tiny SUFFIX RENDER_LIB)
+         PICO_DEBUG_MALLOC=1
+         EMU8950_NO_RATECONV=1
+ 
+-        PICO_CORE1_STACK_SIZE=0x4f8
++        $<IF:$<BOOL:${SC26_BOARD}>,PICO_CORE1_STACK_SIZE=0xC00,PICO_CORE1_STACK_SIZE=0x4f8>
+ 
+         NO_IERROR=1
+     )
+@@ -641,10 +641,17 @@ if (PICO_SDK)
+     target_link_libraries(doom_tiny PRIVATE tiny_settings)
+     add_doom_tiny(_nost render_newhope)
+ 
++    if (SC26_BOARD)
++        # SC26 slot: 512 KB for this image, then the WHD
++        target_compile_definitions(doom_tiny_nost PRIVATE TINY_WAD_ADDR=0x10080000)
++        pico_enable_stdio_uart(doom_tiny_nost 0)
++        pico_enable_stdio_usb(doom_tiny_nost 0)
++    else()
+     target_compile_definitions(doom_tiny_nost PRIVATE
+             # NO_USE_FINALE_CAST=1 # note this is only used by doom II but doesnt take that much more space
+             TINY_WAD_ADDR=0x10048000
+             )
++    endif()
+     if (PICO_ON_DEVICE)
+         suppress_tinyusb_warnings()
+         add_doom_tiny(_usb render_newhope)
+diff --git a/src/doom/g_game.c b/src/doom/g_game.c
+index f38b5e5..26fcfe4 100644
+--- a/src/doom/g_game.c
++++ b/src/doom/g_game.c
+@@ -397,8 +397,14 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
+     // fraggle: support the old "joyb_speed = 31" hack which
+     // allowed an autorun effect
+ 
++#if SC26_BOARD
++    extern bool sc26_always_run;
++#endif
+     speed = key_speed >= NUMKEYS
+          || is_gamekeydown(key_speed)
++#if SC26_BOARD
++         || sc26_always_run
++#endif
+ #if !NO_USE_JOYSTICK
+          || joybspeed >= MAX_JOY_BUTTONS
+          || joybuttons[joybspeed]
+diff --git a/src/doom/p_saveg.c b/src/doom/p_saveg.c
+index 97d8a6c..79ec8b4 100644
+--- a/src/doom/p_saveg.c
++++ b/src/doom/p_saveg.c
+@@ -2644,6 +2644,12 @@ void P_UnArchiveSpecials (void)
+ #include "hardware/timer.h"
+ #include "picodoom.h"
+ 
++#if SC26_BOARD
++#include "pico/sc26_doom.h"
++const uint8_t *get_end_of_flash(void) {
++    return (const uint8_t *)XIP_BASE + SC26_DOOM_SIZE;
++}
++#else
+ const uint8_t *get_end_of_flash(void) {
+     static const uint8_t *end_of_flash;
+     if (!end_of_flash) {
+@@ -2657,6 +2663,7 @@ const uint8_t *get_end_of_flash(void) {
+     }
+     return end_of_flash;
+ }
++#endif
+ 
+ void P_SaveGameGetExistingFlashSlotAddresses(flash_slot_info_t *slots, int count) {
+     const uint8_t *index = get_end_of_flash() - 4;
+diff --git a/src/i_main.c b/src/i_main.c
+index 13fe30a..c6acd38 100644
+--- a/src/i_main.c
++++ b/src/i_main.c
+@@ -43,6 +43,9 @@
+ #if PICO_RP2350
+ #include "hardware/structs/qmi.h"
+ #endif
++#if SC26_BOARD
++#include "pico/sc26_doom.h"
++#endif
+ //
+ // D_DoomMain()
+ // Not a globally visible function, just included for source reference,
+@@ -63,6 +66,9 @@ int main(int argc, char **argv)
+     myargc = argc;
+     myargv = argv;
+ #endif
++#if SC26_BOARD
++    sc26_early_init();
++#endif
+ #if PICO_ON_DEVICE
+ #if PICO_RP2350
+     uint clkdiv = 3;
+@@ -78,6 +84,9 @@ int main(int argc, char **argv)
+     busy_wait_us(1000);
+     // todo pause? is this the cause of the cold start issue?
+     set_sys_clock_khz(270000, true);
++#if SC26_BOARD
++    sc26_stage(0, 2);
++#endif
+ #if !USE_PICO_NET
+     // debug ?
+ //    gpio_debug_pins_init();
+@@ -94,6 +103,9 @@ int main(int argc, char **argv)
+ #if PICO_BUILD
+     I_Init();
+ #endif
++#if SC26_BOARD
++    sc26_stage(0, 3);
++#endif
+ #if USE_PICO_NET
+     // do init early to set pulls
+     piconet_init();
+@@ -116,6 +128,9 @@ int main(int argc, char **argv)
+ 
+     // start doom
+ 
++#if SC26_BOARD
++    sc26_stage(0, 4);
++#endif
+     D_DoomMain ();
+ 
+     return 0;
+diff --git a/src/i_sound.c b/src/i_sound.c
+index face8cb..f046be8 100644
+--- a/src/i_sound.c
++++ b/src/i_sound.c
+@@ -60,9 +60,14 @@ should_be_const constcharstar snd_musiccmd = "";
+ isb_int8_t snd_pitchshift = -1;
+ 
+ #if !DOOM_TINY
++#if SC26_BOARD
++int snd_musicdevice = SNDDEVICE_NONE;      // the SC26 badge has no speaker
++int snd_sfxdevice = SNDDEVICE_NONE;
++#else
+ int snd_musicdevice = SNDDEVICE_SB;
+ int snd_sfxdevice = SNDDEVICE_SB;
+ #endif
++#endif
+ 
+ // Low-level sound and music modules we are using
+ static const sound_module_t *sound_module;
+diff --git a/src/i_system.h b/src/i_system.h
+index 1609526..59001e2 100644
+--- a/src/i_system.h
++++ b/src/i_system.h
+@@ -63,8 +63,14 @@ void I_Error (const char *error, ...) NORETURN PRINTF_ATTR(1, 2);
+ #else
+ #include "pico.h"
+ //#define I_Error(args...) ((void)0)
++#if SC26_BOARD
++void sc26_exit_to_os(void) __attribute__((noreturn));
++void sc26_error(const char *fmt, ...) __attribute__((noreturn));
++#define I_Error(args...) sc26_error(args)
++#else
+ #define I_Error(args...) __breakpoint();
+ #endif
++#endif
+ 
+ #if DOOM_TINY
+ #include "pico/sem.h"
+diff --git a/src/pico/CMakeLists.txt b/src/pico/CMakeLists.txt
+index 4c470b0..f3f0a8f 100644
+--- a/src/pico/CMakeLists.txt
++++ b/src/pico/CMakeLists.txt
+@@ -39,6 +39,19 @@ target_compile_definitions(common_pico INTERFACE
+ )
+ 
+ pico_generate_pio_header(common_pico ${CMAKE_CURRENT_LIST_DIR}/video_doom.pio)
++
++# SC26 badge: ST77916 round panel, 7 buttons, LED ring (see sc26_doom.c)
++option(SC26_BOARD "Build for the SC26 badge" OFF)
++if (SC26_BOARD)
++    set(SC26_COMMON ${CMAKE_CURRENT_LIST_DIR}/../../../../fw/common)
++    target_sources(common_pico INTERFACE ${CMAKE_CURRENT_LIST_DIR}/sc26_doom.c)
++    target_include_directories(common_pico INTERFACE ${SC26_COMMON})
++    target_compile_definitions(common_pico INTERFACE SC26_BOARD=1 NO_USE_UART=1)
++    pico_generate_pio_header(common_pico ${SC26_COMMON}/qspi_lcd.pio)
++    pico_generate_pio_header(common_pico ${SC26_COMMON}/ws2812.pio)
++    target_link_libraries(common_pico INTERFACE hardware_pio hardware_dma hardware_pwm hardware_watchdog hardware_xip_cache)
++    pico_wrap_function(common_pico panic)
++endif()
+ target_link_libraries(common_pico INTERFACE pico_stdlib pico_multicore pico_scanvideo_dpi)
+ 
+ add_library(pico_cd INTERFACE)
+diff --git a/src/pico/i_input.c b/src/pico/i_input.c
+index 1ac1e1f..9063f48 100644
+--- a/src/pico/i_input.c
++++ b/src/pico/i_input.c
+@@ -511,7 +511,16 @@ static void pico_quit(void) {
+ }
+ #endif
+ 
++#if SC26_BOARD
++#include "sc26_doom.h"
++#include "pico/time.h"
++void sc26_ambient(void);
++#endif
++
+ void I_InputInit(void) {
++#if SC26_BOARD
++    sc26_input_init();
++#endif
+ #if PICO_NO_HARDWARE
+     platform_key_down = pico_key_down;
+     platform_key_up = pico_key_up;
+@@ -530,6 +539,12 @@ void I_GetEvent() {
+ }
+ 
+ void I_GetEventTimeout(int key_timeout) {
++#if SC26_BOARD
++    sc26_input_poll();
++    static uint32_t last_led;
++    uint32_t t = time_us_32();
++    if (t - last_led > 28000) { last_led = t; sc26_ambient(); }
++#endif
+ #if PICO_ON_DEVICE && !NO_USE_UART
+     if (uart_is_readable(uart_default)) {
+         char c = uart_getc(uart_default);
+diff --git a/src/pico/i_picosound.c b/src/pico/i_picosound.c
+index 5b00701..49e5f22 100644
+--- a/src/pico/i_picosound.c
++++ b/src/pico/i_picosound.c
+@@ -481,6 +481,7 @@ void I_PicoSoundSetMusicGenerator(void (*generator)(audio_buffer_t *buffer)) {
+ 
+ #if PICO_ON_DEVICE
+ void I_PicoSoundFade(bool in) {
++    if (!sound_initialized) return;
+     fade_state = in ? FS_FADE_IN : FS_FADE_OUT;
+     fade_level = in ? FADE_STEP : 0x10000 - FADE_STEP;
+ }
+diff --git a/src/pico/i_system.c b/src/pico/i_system.c
+index cd05c64..7a5425f 100644
+--- a/src/pico/i_system.c
++++ b/src/pico/i_system.c
+@@ -464,8 +464,14 @@ void handle_exit_key_down(int scancode, bool shift, uint8_t *kb_buffer, int kb_l
+ }
+ 
+ uint8_t *exit_screen_kb_buffer_80;
++#if SC26_BOARD
++#include "sc26_doom.h"
++#endif
+ void __attribute((noreturn)) I_Quit (void)
+ {
++#if SC26_BOARD
++    sc26_exit_to_os();
++#endif
+     extern void D_Endoom();
+ #if USE_PICO_NET
+     piconet_stop();
+diff --git a/src/pico/i_video.c b/src/pico/i_video.c
+index 15bb9d7..c5fb44f 100644
+--- a/src/pico/i_video.c
++++ b/src/pico/i_video.c
+@@ -57,6 +57,21 @@
+ #include "hardware/structs/xip_ctrl.h"
+ #endif
+ 
++#if SC26_BOARD
++// SC26 badge: output goes to the ST77916 panel, which takes big-endian RGB565 on the wire
++#include "sc26_doom.h"
++#include "hardware/timer.h"
++#include "hardware/irq.h"
++#include "hardware/structs/watchdog.h"
++#include "hardware/structs/scb.h"
++#include "hardware/structs/m33_eppb.h"
++#include "hardware/clocks.h"
++#include "hardware/sync.h"
++#undef PICO_SCANVIDEO_PIXEL_FROM_RGB8
++#define SC26_RGB565(r, g, b) ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
++#define PICO_SCANVIDEO_PIXEL_FROM_RGB8(r, g, b) ((uint16_t)((SC26_RGB565(r, g, b) >> 8) | (SC26_RGB565(r, g, b) << 8)))
++#endif
++
+ #define YELLOW_SUBMARINE 0
+ #define SUPPORT_TEXT 1
+ #if SUPPORT_TEXT
+@@ -292,9 +307,15 @@ void I_SetWindowTitle(const char *title)
+ //
+ // I_SetPalette
+ //
++#if SC26_BOARD
++static volatile int8_t sc26_palnum;
++#endif
+ void I_SetPaletteNum(int doompalette)
+ {
+     next_pal = doompalette;
++#if SC26_BOARD
++    sc26_palnum = doompalette;
++#endif
+ }
+ 
+ //
+@@ -980,6 +1001,55 @@ void __no_inline_not_in_flash_func(new_frame_stuff)() {
+     }
+ }
+ 
++#if SC26_BOARD
++// Builds one 320-pixel line (big-endian RGB565) of the current display frame: the 8-bit
++// frame buffer through the palette, then the vpatch overlays (status bar, menus, HUD text).
++// Same work the VGA version did per scanline, minus the scanvideo bookkeeping.
++// (in main RAM, not scratch X: scratch X holds core 1's stack, which needed the room)
++void __not_in_flash_func(sc26_fill_line)(uint32_t *dest, int scanline) {
++#if USE_INTERP
++    need_save = interp_in_use;
++    interp_updated = 0;
++#endif
++    if (display_video_type == VIDEO_TYPE_TEXT) {
++        memset(dest, 0, SCREENWIDTH * 2);
++    } else {
++        scanline_funcs[display_video_type](dest, scanline);
++        if (display_video_type >= FIRST_VIDEO_TYPE_WITH_OVERLAYS) {
++            int prev = 0;
++            for (int vp = vpatchlists->vpatch_starters[scanline]; vp;) {
++                int next = vpatchlists->vpatch_next[vp];
++                while (vpatchlists->vpatch_next[prev] && vpatchlists->vpatch_next[prev] < vp) {
++                    prev = vpatchlists->vpatch_next[prev];
++                }
++                vpatchlists->vpatch_next[vp] = vpatchlists->vpatch_next[prev];
++                vpatchlists->vpatch_next[prev] = vp;
++                prev = vp;
++                vp = next;
++            }
++            vpatchlist_t *overlays = vpatchlists->overlays[display_overlay_index];
++            prev = 0;
++            for (int vp = vpatchlists->vpatch_next[prev]; vp; vp = vpatchlists->vpatch_next[prev]) {
++                patch_t *patch = resolve_vpatch_handle(overlays[vp].entry.patch_handle);
++                int yoff = scanline - overlays[vp].entry.y;
++                if (yoff < vpatch_height(patch)) {
++                    vpatchlists->vpatch_doff[vp] = draw_vpatch((uint16_t*)dest, patch, &overlays[vp],
++                                                               vpatchlists->vpatch_doff[vp]);
++                    prev = vp;
++                } else {
++                    vpatchlists->vpatch_next[prev] = vpatchlists->vpatch_next[vp];
++                }
++            }
++        }
++    }
++#if USE_INTERP
++    if (interp_updated && need_save) {
++        interp_restore_static(interp0, &interp0_save);
++        interp_restore_static(interp1, &interp1_save);
++    }
++#endif
++}
++#else
+ void __scratch_x("scanlines") fill_scanlines() {
+ #if SUPPORT_TEXT
+     struct scanvideo_scanline_buffer *buffer = scanvideo_begin_scanline_generation_linked(display_video_type == VIDEO_TYPE_TEXT ? 2 : 1, false);
+@@ -1069,6 +1139,7 @@ void __scratch_x("scanlines") fill_scanlines() {
+     }
+ #endif
+ }
++#endif
+ #pragma GCC pop_options
+ 
+ #if PICO_ON_DEVICE
+@@ -1086,6 +1157,208 @@ static void __not_in_flash_func(free_buffer_callback)() {
+ }
+ #endif
+ 
++#if SC26_BOARD
++// ---------------------------------------------------------------- SC26 panel pump (core 1)
++// A 60 Hz tick starts a frame (exactly where scanvideo started a VGA frame, so wipes and
++// palette flashes keep their speed). The tick is a dummy DMA transfer paced by a DMA pacing
++// timer, so the whole pump runs off DMA_IRQ_0 (the timer-alarm version stopped ticking on the
++// badge after a few seconds). Each finished line DMA starts the next line and builds
++// the one after it, so lines are generated just ahead of the QSPI transfer. Everything here
++// runs from RAM because it keeps going while core 0 writes save games to flash.
++// Overlay patches (status bar, HUD, menus) can write a little before and past the 320 visible
++// pixels - the VGA buffers had header/trailer words that absorbed it. Without slack those
++// writes ran into the pump's own variables right after these buffers and stopped the frame
++// tick as soon as a level started. 64 bytes in front, 256 behind, per line.
++#define SC26_LB_PRE  16
++#define SC26_LB_POST 64
++static uint32_t __aligned(4) sc26_lbuf_raw[2][SC26_LB_PRE + SCREENWIDTH / 2 + SC26_LB_POST];
++#define sc26_lbuf_line(i) (&sc26_lbuf_raw[(i)][SC26_LB_PRE])
++static volatile bool sc26_busy;
++static int sc26_sent, sc26_fill;
++static int sc26_pace_dma = -1;
++static uint32_t sc26_pace_count, sc26_pace_word;
++static uint32_t sc26_frame_t0;            // when the current frame started (us)
++volatile uint32_t sc26_frames, sc26_recoveries, sc26_core1_pc, sc26_c1_last_alarm_us;
++void sc26_fill_line(uint32_t *dest, int scanline);
++
++// pump state for crash reports: busy | line being sent | next line to build
++void sc26_pump_regs(uint32_t *out) {          // DMA / pump registers for the freeze report
++    out[0] = dma_hw->inte0;
++    out[1] = dma_hw->ints0;
++    out[2] = dma_hw->intr;
++    out[3] = dma_hw->ch[sc26_lcd_dma].ctrl_trig;
++    out[4] = dma_hw->ch[sc26_lcd_dma].transfer_count;
++    out[5] = sc26_pace_dma >= 0 ? dma_hw->ch[sc26_pace_dma].ctrl_trig : 0;
++    out[6] = sc26_pace_dma >= 0 ? dma_hw->ch[sc26_pace_dma].transfer_count : 0;
++    out[7] = ((uint32_t)sc26_lcd_dma << 8) | (uint32_t)(sc26_pace_dma & 0xFF);
++    out[8] = sc26_frame_t0;
++}
++
++uint32_t sc26_pump_state(void) {
++    return ((uint32_t)sc26_busy << 31) | ((uint32_t)(sc26_sent & 0x7FFF) << 16) | (uint32_t)(sc26_fill & 0xFFFF);
++}
++
++static void __not_in_flash_func(sc26_frame_start)(void) {
++    if (sc26_busy) {
++        // A frame normally takes ~4 ms. If one has been "in flight" for 100 ms an interrupt
++        // went missing: reset the panel link instead of freezing the game (core 0 would wait
++        // forever for the frame buffer to be released).
++        if (timer_hw->timerawl - sc26_frame_t0 < 100000) return;
++        sc26_lcd_recover();
++        sc26_recoveries++;
++    }
++    sc26_busy = true;
++    sc26_frame_t0 = timer_hw->timerawl;
++    new_frame_stuff();
++    sc26_lcd_begin_pixels(SC26_VIEW_X, SC26_VIEW_Y, SCREENWIDTH, SCREENHEIGHT);
++    sc26_fill_line(sc26_lbuf_line(0), 0);
++    sc26_sent = 0;
++    sc26_lcd_start_dma(sc26_lbuf_line(0), SCREENWIDTH * 2);
++    sc26_fill_line(sc26_lbuf_line(1), 1);
++    sc26_fill = 2;
++}
++
++static inline void __not_in_flash_func(sc26_pace_restart)(void) {
++    dma_channel_set_trans_count(sc26_pace_dma, sc26_pace_count, true);
++}
++
++void __attribute__((used)) __not_in_flash_func(sc26_dma_isr_c)(uint32_t *frame) {
++    uint32_t st = dma_hw->ints0;
++    if (st & (1u << sc26_lcd_dma)) {
++        dma_hw->ints0 = 1u << sc26_lcd_dma;
++        if (++sc26_sent >= SCREENHEIGHT) {
++            sc26_lcd_end_pixels();
++            sc26_busy = false;
++            if (++sc26_frames == 60) watchdog_hw->scratch[0] = (watchdog_hw->scratch[0] & ~0x00FF0000u) | (8u << 16);
++        } else {
++            sc26_lcd_start_dma(sc26_lbuf_line(sc26_sent & 1), SCREENWIDTH * 2);
++            if (sc26_fill < SCREENHEIGHT) {
++                sc26_fill_line(sc26_lbuf_line(sc26_fill & 1), sc26_fill);
++                sc26_fill++;
++            }
++        }
++    }
++    if (st & (1u << sc26_pace_dma)) {       // 60 Hz tick
++        dma_hw->ints0 = 1u << sc26_pace_dma;
++        sc26_core1_pc = frame[6];           // where core 1's own work was when we interrupted it
++        sc26_c1_last_alarm_us = timer_hw->timerawl;
++        sc26_pace_restart();
++        sc26_frame_start();
++    }
++}
++
++// naked entry so the C part can see the exception frame (core 1 threads run on MSP)
++static void __attribute__((naked)) __not_in_flash_func(sc26_dma_isr)(void) {
++    __asm volatile(
++        "tst lr, #4          \n"
++        "ite eq              \n"
++        "mrseq r0, msp       \n"
++        "mrsne r0, psp       \n"
++        "b sc26_dma_isr_c    \n");
++}
++
++// a dummy word-to-word DMA paced by a DMA timer: its completion is the 60 Hz frame tick
++static void sc26_pace_init(void) {
++    int t = dma_claim_unused_timer(true);
++    dma_timer_set_fraction((uint)t, 1, 0xFFFF);                 // clk_sys / 65535 per transfer
++    uint32_t rate = clock_get_hz(clk_sys) / 0xFFFFu;
++    sc26_pace_count = (rate + 30) / 60;
++    sc26_pace_dma = dma_claim_unused_channel(true);
++    dma_channel_config c = dma_channel_get_default_config((uint)sc26_pace_dma);
++    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
++    channel_config_set_read_increment(&c, false);
++    channel_config_set_write_increment(&c, false);
++    channel_config_set_dreq(&c, dma_get_timer_dreq((uint)t));
++    dma_channel_configure((uint)sc26_pace_dma, &c, &sc26_pace_word, &sc26_pace_word, sc26_pace_count, false);
++    dma_channel_set_irq0_enabled((uint)sc26_pace_dma, true);
++}
++
++// LED ring: each LED takes the colour of the 3D view in its direction; damage / pickup /
++// radiation-suit palette flashes tint the whole ring. Called from the input poll (core 0).
++void sc26_ambient(void) {
++    const uint8_t *fb = frame_buffer[display_frame_index];
++    int pal = sc26_palnum;
++    // sampling direction for ring position k (k = 0 nose, then down the right side of the
++    // SAINTCON rocket, across the fins and up the left): -90, -28, 0, 26, 53, 127, 154, 180,
++    // 208 degrees, as in SC26 OS ambient.c. Q10.
++    static const int16_t kcos[9] = { 0, 904, 1024, 920, 616, -616, -920, -1024, -904 };
++    static const int16_t ksin[9] = { -1024, -481, 0, 449, 818, 818, 449, 0, -481 };
++    for (int k = 0; k < 9; k++) {
++        int cx = 160 + 140 * kcos[k] / 1024, cy = MAIN_VIEWHEIGHT / 2 + (MAIN_VIEWHEIGHT / 2 - 14) * ksin[k] / 1024;
++        int r = 0, g = 0, b = 0;
++        for (int dy = -8; dy <= 8; dy += 8)
++            for (int dx = -8; dx <= 8; dx += 8) {
++                int x = cx + dx, y = cy + dy;
++                if (x < 0) x = 0;
++                if (x >= SCREENWIDTH) x = SCREENWIDTH - 1;
++                if (y < 0) y = 0;
++                if (y >= MAIN_VIEWHEIGHT) y = MAIN_VIEWHEIGHT - 1;
++                uint16_t be = palette[fb[y * SCREENWIDTH + x]];
++                uint16_t c = (uint16_t)((be >> 8) | (be << 8));
++                r += (c >> 11) << 3; g += ((c >> 5) & 63) << 2; b += (c & 31) << 3;
++            }
++        r /= 9; g /= 9; b /= 9;
++        // saturate a little and keep it dim: the ring is right next to your eyes
++        int m = (r + g + b) / 3;
++        r = m + (r - m) * 3 / 2; g = m + (g - m) * 3 / 2; b = m + (b - m) * 3 / 2;
++        if (pal >= 1 && pal <= 8) { int t = pal * 28; r += (255 - r) * t / 255; g -= g * t / 255; b -= b * t / 255; }
++        else if (pal >= 9 && pal <= 12) { int t = (pal - 8) * 40; r += (255 - r) * t / 255; g += (200 - g) * t / 255; b -= b * t / 255; }
++        else if (pal == 13) { g += (255 - g) / 3; }
++        r = r < 0 ? 0 : r > 255 ? 255 : r;
++        g = g < 0 ? 0 : g > 255 ? 255 : g;
++        b = b < 0 ? 0 : b > 255 ? 255 : b;
++        sc26_set_led_target(k, (uint8_t)(r * 45 / 100), (uint8_t)(g * 45 / 100), (uint8_t)(b * 45 / 100));
++    }
++    sc26_leds_update();
++}
++
++// Put a handler straight into the (RAM) vector table. irq_set_exclusive_handler() hard-asserts
++// when the slot isn't the default stub, which killed the first hardware run; if that happens
++// we note what was there (for DOOMLOG.TXT via SC26 OS) and take the slot anyway.
++static void sc26_install_irq(uint num, irq_handler_t handler) {
++    extern uint32_t __vectors[];
++    volatile uint32_t *vt = (volatile uint32_t *)scb_hw->vtor;
++    uint32_t cur = vt[16 + num], dflt = __vectors[16 + num];
++    if (cur != dflt && cur != (uint32_t)handler) {
++        watchdog_hw->scratch[2] = 0xA0000000u | num;
++        watchdog_hw->scratch[3] = cur;
++    }
++    vt[16 + num] = (uint32_t)handler;
++    __dsb(); __isb();
++}
++
++uint32_t *sc26_c1_stack_lo, *sc26_c1_stack_hi;
++
++static void core1() {
++    // paint the unused part of our stack so a freeze report can say how deep it ever got
++    {
++        uint32_t *sp;
++        __asm volatile("mov %0, sp" : "=r"(sp));
++        sc26_c1_stack_hi = sp - 16;
++        sc26_c1_stack_lo = sp - PICO_CORE1_STACK_SIZE / 4 + 24;
++        for (uint32_t *p = sc26_c1_stack_lo; p < sc26_c1_stack_hi; p++) *p = 0x5C26C0DEu;
++    }
++    // a doorbell from core 0 becomes an NMI here, so a freeze report can say where core 1 was
++    // even if it is stuck with interrupts off
++    eppb_hw->nmi_mask[0] |= 1u << SIO_IRQ_BELL;
++    sc26_stage(1, 1);
++    sc26_lcd_init();
++    sc26_stage(1, 2);
++    dma_channel_set_irq0_enabled(sc26_lcd_dma, true);
++    sc26_install_irq(DMA_IRQ_0, sc26_dma_isr);
++    irq_set_enabled(DMA_IRQ_0, true);
++    sc26_stage(1, 4);
++    sc26_pace_init();
++    sc26_stage(1, 5);
++    sc26_pace_restart();
++    sc26_stage(1, 6);
++    sem_release(&core1_launch);
++    sc26_stage(1, 7);
++    while (true) {
++        pd_core1_loop();
++    }
++}
++#else
+ //static semaphore_t init_sem;
+ static void core1() {
+ #if !PICO_ON_DEVICE
+@@ -1115,11 +1388,16 @@ static void core1() {
+     }
+ }
+ 
++#endif // SC26_BOARD
++
+ #if PICO_RP2350
+ #include "hardware/structs/accessctrl.h"
+ #endif
+ void I_InitGraphics(void)
+ {
++#if SC26_BOARD
++    sc26_stage(0, 5);
++#endif
+     stbar = resolve_vpatch_handle(VPATCH_STBAR);
+     sem_init(&render_frame_ready, 0, 2);
+     sem_init(&display_frame_freed, 1, 2);
+@@ -1128,6 +1406,9 @@ void I_InitGraphics(void)
+     multicore_launch_core1(core1);
+     // wait for core1 launch as it may do malloc and we have no mutex around that
+     sem_acquire_blocking(&core1_launch);
++#if SC26_BOARD
++    sc26_stage(0, 6);
++#endif
+ #if USE_ZONE_FOR_MALLOC
+     disallow_core1_malloc = true;
+ #endif
+diff --git a/src/pico/picoflash.c b/src/pico/picoflash.c
+index 42edff7..e2ef048 100644
+--- a/src/pico/picoflash.c
++++ b/src/pico/picoflash.c
+@@ -36,7 +36,14 @@ static void __no_inline_not_in_flash_func(flash_enable_xip_via_boot2)(const uint
+ 
+ #define FLASH_BLOCK_SIZE (1u << 16)
+ 
++#if SC26_BOARD
++#include "sc26_doom.h"
++#endif
+ void __no_inline_not_in_flash_func(picoflash_sector_program)(uint32_t flash_offs, const uint8_t *data) {
++#if SC26_BOARD
++    if (!sc26_flash_offset_ok(flash_offs)) return;
++    flash_offs += sc26_flash_slot_base();
++#endif
+     rom_connect_internal_flash_fn connect_internal_flash = (rom_connect_internal_flash_fn)rom_func_lookup_inline(ROM_FUNC_CONNECT_INTERNAL_FLASH);
+     rom_flash_exit_xip_fn flash_exit_xip = (rom_flash_exit_xip_fn)rom_func_lookup_inline(ROM_FUNC_FLASH_EXIT_XIP);
+     rom_flash_range_program_fn flash_range_program = (rom_flash_range_program_fn)rom_func_lookup_inline(ROM_FUNC_FLASH_RANGE_PROGRAM);
+diff --git a/src/pico/piconet.c b/src/pico/piconet.c
+index f0c9aa6..7b4ffbb 100644
+--- a/src/pico/piconet.c
++++ b/src/pico/piconet.c
+@@ -10,7 +10,8 @@
+ 
+ boolean net_client_connected;
+ 
+-#if PICO_ON_DEVICE
++// SC26: no I2C link cable (and GP18/19 are an LED and a button), so use the single-player stubs
++#if PICO_ON_DEVICE && !SC26_BOARD
+ #include "hardware/irq.h"
+ #include "hardware/dma.h"
+ #include "hardware/timer.h"
+diff --git a/src/pico/sc26_doom.c b/src/pico/sc26_doom.c
+new file mode 100644
+index 0000000..2aa91ef
+--- /dev/null
++++ b/src/pico/sc26_doom.c
+@@ -0,0 +1,578 @@
++// SC26 badge port glue for rp2040-doom. See sc26_doom.h.
++//
++// Copyright(C) 2026 SC26 badge port. GPL-2.0-or-later, like the rest of this tree.
++
++#if SC26_BOARD
++#include <string.h>
++#include "pico/stdlib.h"
++#include "hardware/pio.h"
++#include "hardware/dma.h"
++#include "hardware/pwm.h"
++#include "hardware/gpio.h"
++#include "hardware/watchdog.h"
++#include "hardware/structs/qmi.h"
++#include "hardware/structs/xip_ctrl.h"
++#include "hardware/xip_cache.h"
++#include "hardware/clocks.h"
++#include "hardware/sync.h"
++#include "hardware/structs/watchdog.h"
++#include "hardware/structs/scb.h"
++#include "hardware/structs/sio.h"
++#include "hardware/structs/syscfg.h"
++#include "hardware/structs/nvic.h"
++#include "hardware/timer.h"
++#include "hardware/irq.h"
++#include "pico/platform.h"
++#include "sc26_doom.h"
++#include "board_sc26.h"
++#include "st77916_init.h"
++#include "qspi_lcd.pio.h"
++#include "ws2812.pio.h"
++
++#include "doomkeys.h"
++#include "d_event.h"
++#include "doom/doomstat.h"
++#include "doom/d_items.h"
++#include "doom/d_player.h"
++
++// ------------------------------------------------------------------ SC26 OS settings (read-only)
++// Same layout as SC26 OS settings.c; read through the untranslated XIP alias because this
++// image runs with the flash window shifted to its own slot.
++#define SC26_SETTINGS_PHYS 0x2FF000u
++typedef struct { uint8_t stay, led_mode, brightness, zoom, ring_cw; char gif[96]; } os_settings_t;
++typedef struct { uint32_t magic, version; os_settings_t s; uint32_t crc; } os_stored_t;
++static uint8_t os_brightness = 100, os_led_mode = 1, os_ring_cw = 0;   // rocket: 8,0,1,2 on the left
++
++static uint32_t crc32(const uint8_t *p, size_t n) {
++    uint32_t c = 0xFFFFFFFFu;
++    while (n--) { c ^= *p++; for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & -(c & 1)); }
++    return ~c;
++}
++
++static void read_os_settings(void) {
++    const os_stored_t *st = (const os_stored_t *)(XIP_NOCACHE_NOALLOC_NOTRANSLATE_BASE + SC26_SETTINGS_PHYS);
++    if (st->magic == 0x53433236u && st->version == 1 && st->crc == crc32((const uint8_t *)&st->s, sizeof st->s)) {
++        os_brightness = (st->s.brightness >= 10 && st->s.brightness <= 100) ? st->s.brightness : 100;
++        os_led_mode = st->s.led_mode;
++        os_ring_cw = st->s.ring_cw;
++    }
++}
++
++// ------------------------------------------------------------------ flash slot / address translation
++static uint32_t slot_base;
++
++uint32_t sc26_flash_slot_base(void) { return slot_base; }
++
++bool sc26_flash_offset_ok(uint32_t logical_offs) {
++    return logical_offs >= SC26_WHD_OFFSET && logical_offs < SC26_DOOM_SIZE;
++}
++
++void sc26_early_init(void) {
++    nvic_hw->icer[0] = 0xFFFFFFFFu; nvic_hw->icer[1] = 0xFFFFFFFFu;
++    nvic_hw->icpr[0] = 0xFFFFFFFFu; nvic_hw->icpr[1] = 0xFFFFFFFFu;
++    // SC26 OS starts us with rom_chain_image(): the boot ROM maps our slot to 0x10000000 through
++    // QMI ATRANS0. Make sure the whole 6.5 MB slot is visible (the WAD continues past 4 MB),
++    // whatever the boot ROM did with the second window.
++    uint32_t a0 = qmi_hw->atrans[0];
++    uint32_t base0 = (a0 & QMI_ATRANS0_BASE_BITS) >> QMI_ATRANS0_BASE_LSB;     // 4 KB units
++    slot_base = base0 << 12;
++    uint32_t want0 = (base0 << QMI_ATRANS0_BASE_LSB) | (0x400u << QMI_ATRANS0_SIZE_LSB);
++    uint32_t want1 = ((base0 + 0x400u) << QMI_ATRANS1_BASE_LSB) |
++                     (((SC26_DOOM_SIZE - 0x400000u) >> 12) << QMI_ATRANS1_SIZE_LSB);
++    if (qmi_hw->atrans[0] != want0) qmi_hw->atrans[0] = want0;
++    if (qmi_hw->atrans[1] != want1) {
++        qmi_hw->atrans[1] = want1;
++        xip_cache_invalidate_all();     // drop anything cached under the old 4..8 MB mapping
++    }
++    read_os_settings();
++    watchdog_hw->scratch[1] = watchdog_hw->scratch[2] = watchdog_hw->scratch[3] = 0;
++    sc26_stage(0, 1);
++    sc26_stage(1, 0);
++    watchdog_enable(15000, true);   // a hang reboots into SC26 OS, which logs where it got stuck
++}
++
++// ------------------------------------------------------------------ panel
++static PIO lcd_pio = pio1;
++static uint lcd_sm;
++int sc26_lcd_dma = -1;
++
++static inline void __not_in_flash_func(cs_low)(void)  { gpio_put(PIN_LCD_CS, 0); }
++static inline void __not_in_flash_func(cs_high)(void) { gpio_put(PIN_LCD_CS, 1); }
++static inline void __not_in_flash_func(put_raw)(uint8_t b) { pio_sm_put_blocking(lcd_pio, lcd_sm, (uint32_t)b << 24); }
++
++static void __not_in_flash_func(put_single)(uint8_t b) {
++    for (int i = 7; i > 0; i -= 2)
++        put_raw((uint8_t)((((b >> i) & 1) << 4) | ((b >> (i - 1)) & 1)));
++}
++
++static void __not_in_flash_func(wait_idle)(void) {
++    uint32_t stall = 1u << (PIO_FDEBUG_TXSTALL_LSB + lcd_sm);
++    while (!pio_sm_is_tx_fifo_empty(lcd_pio, lcd_sm)) tight_loop_contents();
++    lcd_pio->fdebug = stall;
++    while (!(lcd_pio->fdebug & stall)) tight_loop_contents();
++}
++
++static void __not_in_flash_func(send_cmd)(uint8_t cmd, const uint8_t *data, int len) {
++    cs_low();
++    put_single(0x02); put_single(0x00); put_single(cmd); put_single(0x00);
++    for (int i = 0; i < len; i++) put_single(data[i]);
++    wait_idle();
++    cs_high();
++}
++
++void __not_in_flash_func(sc26_lcd_begin_pixels)(int x, int y, int w, int h) {
++    int x1 = x + w - 1, y1 = y + h - 1;
++    uint8_t ca[4] = { (uint8_t)(x >> 8), (uint8_t)x, (uint8_t)(x1 >> 8), (uint8_t)x1 };
++    uint8_t ra[4] = { (uint8_t)(y >> 8), (uint8_t)y, (uint8_t)(y1 >> 8), (uint8_t)y1 };
++    send_cmd(0x2A, ca, 4);
++    send_cmd(0x2B, ra, 4);
++    cs_low();
++    put_single(0x32); put_single(0x00); put_single(0x2C); put_single(0x00);
++}
++
++void __not_in_flash_func(sc26_lcd_start_dma)(const void *src, uint32_t bytes) {
++    dma_channel_set_read_addr(sc26_lcd_dma, src, false);
++    dma_channel_set_trans_count(sc26_lcd_dma, bytes, true);
++}
++
++void __not_in_flash_func(sc26_lcd_recover)(void) {
++    hw_clear_bits(&dma_hw->ch[sc26_lcd_dma].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
++    dma_hw->abort = 1u << sc26_lcd_dma;
++    while (dma_hw->abort & (1u << sc26_lcd_dma)) tight_loop_contents();
++    hw_set_bits(&dma_hw->ch[sc26_lcd_dma].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
++    dma_hw->ints0 = 1u << sc26_lcd_dma;
++    pio_sm_clear_fifos(lcd_pio, lcd_sm);
++    cs_high();
++}
++
++void __not_in_flash_func(sc26_lcd_end_pixels)(void) {
++    wait_idle();
++    cs_high();
++}
++
++void sc26_backlight(int pct) {
++    if (pct < 0) pct = 0;
++    if (pct > 100) pct = 100;
++    pwm_set_gpio_level(PIN_LCD_BL, (uint16_t)(pct * 10));
++}
++
++static void fill_screen(uint16_t c) {
++    sc26_lcd_begin_pixels(0, 0, LCD_WIDTH, LCD_HEIGHT);
++    for (int n = LCD_WIDTH * LCD_HEIGHT; n > 0; n--) { put_raw(c >> 8); put_raw(c & 0xFF); }
++    sc26_lcd_end_pixels();
++}
++
++void sc26_lcd_init(void) {
++    uint32_t sys = clock_get_hz(clk_sys);
++    gpio_set_function(PIN_LCD_BL, GPIO_FUNC_PWM);
++    uint slice = pwm_gpio_to_slice_num(PIN_LCD_BL);
++    pwm_config pc = pwm_get_default_config();
++    pwm_config_set_clkdiv_int(&pc, (sys + 5000000u) / 10000000u);   // ~10 MHz / 1000 = 10 kHz
++    pwm_config_set_wrap(&pc, 999);
++    pwm_init(slice, &pc, true);
++    sc26_backlight(0);
++
++    gpio_init(PIN_LCD_CS);  gpio_set_dir(PIN_LCD_CS, GPIO_OUT);  gpio_put(PIN_LCD_CS, 1);
++    gpio_init(PIN_LCD_RST); gpio_set_dir(PIN_LCD_RST, GPIO_OUT); gpio_put(PIN_LCD_RST, 1);
++    gpio_init(PIN_LCD_TE);  gpio_set_dir(PIN_LCD_TE, GPIO_IN);   gpio_pull_up(PIN_LCD_TE);
++
++    uint offset = pio_add_program(lcd_pio, &qspi_lcd_program);
++    lcd_sm = pio_claim_unused_sm(lcd_pio, true);
++    // SCK = sys / (2 * div); integer divider (no jitter), SCK <= 75 MHz like the original firmware
++    uint div = (sys + 149999999u) / 150000000u;
++    if (div < 1) div = 1;
++    // same setup as qspi_lcd_program_init(), but with an integer divider: this build has no
++    // float library (pico_float "none"), and the float helpers would panic
++    {
++        pio_sm_config c = qspi_lcd_program_get_default_config(offset);
++        sm_config_set_out_pins(&c, PIN_LCD_D0, 4);
++        sm_config_set_sideset_pins(&c, PIN_LCD_SCK);
++        sm_config_set_out_shift(&c, false, true, 8);
++        sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
++        sm_config_set_clkdiv_int_frac8(&c, div, 0);
++        for (uint i = 0; i < 4; i++) pio_gpio_init(lcd_pio, PIN_LCD_D0 + i);
++        pio_gpio_init(lcd_pio, PIN_LCD_SCK);
++        pio_sm_set_pins_with_mask(lcd_pio, lcd_sm, 0, (0xFu << PIN_LCD_D0) | (1u << PIN_LCD_SCK));
++        pio_sm_set_consecutive_pindirs(lcd_pio, lcd_sm, PIN_LCD_D0, 4, true);
++        pio_sm_set_consecutive_pindirs(lcd_pio, lcd_sm, PIN_LCD_SCK, 1, true);
++        pio_sm_init(lcd_pio, lcd_sm, offset, &c);
++        pio_sm_set_enabled(lcd_pio, lcd_sm, true);
++    }
++
++    dma_channel_claim(11);       // used by the status-bar XIP streaming in i_video.c
++    sc26_lcd_dma = dma_claim_unused_channel(true);
++    dma_channel_config dc = dma_channel_get_default_config(sc26_lcd_dma);
++    channel_config_set_transfer_data_size(&dc, DMA_SIZE_8);
++    channel_config_set_read_increment(&dc, true);
++    channel_config_set_write_increment(&dc, false);
++    channel_config_set_dreq(&dc, pio_get_dreq(lcd_pio, lcd_sm, true));
++    dma_channel_configure(sc26_lcd_dma, &dc, &lcd_pio->txf[lcd_sm], NULL, 0, false);
++
++    gpio_put(PIN_LCD_RST, 1); sleep_ms(10);
++    gpio_put(PIN_LCD_RST, 0); sleep_ms(10);
++    gpio_put(PIN_LCD_RST, 1); sleep_ms(120);
++    for (size_t i = 0; i < ST77916_INIT_SEQ_LEN; i++) {
++        const st77916_init_cmd_t *c = &st77916_init_seq[i];
++        send_cmd(c->cmd, c->data, c->len);
++        if (c->delay_ms) sleep_ms(c->delay_ms);
++    }
++    fill_screen(0x0000);
++    sc26_backlight(os_brightness);
++}
++
++// ------------------------------------------------------------------ LEDs
++static PIO led_pio = pio0;
++static uint led_sm;
++static int16_t led_cur[WS2812_COUNT][3], led_tgt[WS2812_COUNT][3];
++
++static void leds_init(void) {
++    uint offset = pio_add_program(led_pio, &ws2812_program);
++    led_sm = pio_claim_unused_sm(led_pio, true);
++    {   // ws2812_program_init() with an integer 8.8 divider (no float library in this build)
++        pio_gpio_init(led_pio, PIN_WS2812);
++        pio_sm_set_consecutive_pindirs(led_pio, led_sm, PIN_WS2812, 1, true);
++        pio_sm_config c = ws2812_program_get_default_config(offset);
++        sm_config_set_sideset_pins(&c, PIN_WS2812);
++        sm_config_set_out_shift(&c, false, true, 24);
++        sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
++        uint32_t bit_hz = 800000u * (ws2812_T1 + ws2812_T2 + ws2812_T3);
++        uint32_t div256 = (uint32_t)(((uint64_t)clock_get_hz(clk_sys) * 256u + bit_hz / 2) / bit_hz);
++        sm_config_set_clkdiv_int_frac8(&c, div256 >> 8, (uint8_t)(div256 & 0xFF));
++        pio_sm_init(led_pio, led_sm, offset, &c);
++        pio_sm_set_enabled(led_pio, led_sm, true);
++    }
++    gpio_init(PIN_STATUS_LED); gpio_set_dir(PIN_STATUS_LED, GPIO_OUT); gpio_put(PIN_STATUS_LED, 0);
++}
++
++static void leds_push(void) {
++    for (int i = 0; i < WS2812_COUNT; i++) {
++        uint32_t r = (uint32_t)led_cur[i][0], g = (uint32_t)led_cur[i][1], b = (uint32_t)led_cur[i][2];
++        pio_sm_put_blocking(led_pio, led_sm, ((g << 16) | (r << 8) | b) << 8);
++    }
++}
++
++// position k = 0..8 clockwise from the top of the screen -> physical LED index
++static int ring_index(int k) { return os_ring_cw ? (7 + k) % WS2812_COUNT : (7 - k + WS2812_COUNT) % WS2812_COUNT; }
++
++void sc26_set_led_target(int k, uint8_t r, uint8_t g, uint8_t b) {
++    int i = ring_index(k);
++    led_tgt[i][0] = r; led_tgt[i][1] = g; led_tgt[i][2] = b;
++}
++
++void sc26_leds_update(void) {
++    if (os_led_mode == 2) return;                    // LEDs off in SC26 OS -> off here too
++    for (int i = 0; i < WS2812_COUNT; i++)
++        for (int c = 0; c < 3; c++) {
++            led_cur[i][c] += (int16_t)((led_tgt[i][c] - led_cur[i][c]) * 3 / 8);
++            if (led_cur[i][c] < 0) led_cur[i][c] = 0;
++            if (led_cur[i][c] > 255) led_cur[i][c] = 255;
++        }
++    leds_push();
++}
++
++// ------------------------------------------------------------------ diagnostics
++static void diag_set_magic(uint32_t magic) {
++    uint32_t v = watchdog_hw->scratch[0];
++    watchdog_hw->scratch[0] = (magic << 24) | (v & 0x00FFFF00u) | (get_core_num() & 0xFFu);
++}
++
++void sc26_stage(int core, int stage) {
++    uint32_t v = watchdog_hw->scratch[0];
++    if ((v >> 24) != SC26_DIAG_RUN) v = SC26_DIAG_RUN << 24;
++    if (core) v = (v & ~0x00FF0000u) | ((uint32_t)(stage & 0xFF) << 16);
++    else      v = (v & ~0x0000FF00u) | ((uint32_t)(stage & 0xFF) << 8);
++    watchdog_hw->scratch[0] = v;
++    watchdog_update();
++}
++
++static void __attribute__((noreturn)) reboot_to_os(void) {
++    watchdog_reboot(0, 0, 10);     // normal boot = SC26 OS in the first flash slot
++    while (true) tight_loop_contents();
++}
++
++// ------------------------------------------------------------------ exit / crash -> back to SC26 OS
++void sc26_exit_to_os(void) {
++    diag_set_magic(SC26_DIAG_QUIT);
++    sc26_backlight(0);
++    memset(led_cur, 0, sizeof led_cur);
++    leds_push();
++    reboot_to_os();
++}
++
++void __attribute__((noinline)) sc26_error(const char *fmt, ...) {
++    watchdog_hw->scratch[1] = (uint32_t)fmt;
++    watchdog_hw->scratch[2] = (uint32_t)__builtin_return_address(0);
++    diag_set_magic(SC26_DIAG_ERROR);
++    sc26_backlight(0);
++    reboot_to_os();
++}
++
++// SDK panic() (wrapped with --wrap=panic)
++void __attribute__((noinline, noreturn)) __wrap_panic(const char *fmt, ...) {
++    // record the first two code return addresses on the stack: the 2nd is usually whoever
++    // called hard_assertion_failure() / panic()
++    uint32_t *sp, a[2] = { 0, 0 };
++    __asm volatile("mov %0, sp" : "=r"(sp));
++    for (int i = 0, n = 0; i < 64 && n < 2; i++) {
++        uint32_t v = sp[i];
++        if ((v & 1u) && v >= 0x10000000u && v < 0x10080000u) a[n++] = v;
++    }
++    watchdog_hw->scratch[1] = (uint32_t)fmt;
++    watchdog_hw->scratch[2] = a[0] ? a[0] : (uint32_t)__builtin_return_address(0);
++    watchdog_hw->scratch[3] = a[1];
++    diag_set_magic(SC26_DIAG_PANIC);
++    reboot_to_os();
++}
++
++void __attribute__((noreturn)) _exit(int status) {
++    watchdog_hw->scratch[1] = 0xE0000000u | (uint32_t)(status & 0xFF);
++    watchdog_hw->scratch[2] = (uint32_t)__builtin_return_address(0);
++    diag_set_magic(SC26_DIAG_ERROR);
++    reboot_to_os();
++}
++
++void __attribute__((used)) sc26_fault_c(uint32_t *frame) {
++    watchdog_hw->scratch[1] = frame[6];                         // stacked PC
++    watchdog_hw->scratch[2] = frame[5];                         // stacked LR
++    watchdog_hw->scratch[3] = *(volatile uint32_t *)0xE000ED28u; // CFSR
++    diag_set_magic(SC26_DIAG_FAULT);
++    reboot_to_os();
++}
++
++void __attribute__((naked)) isr_hardfault(void) {
++    __asm volatile(
++        "tst lr, #4      \n"
++        "ite eq          \n"
++        "mrseq r0, msp   \n"
++        "mrsne r0, psp   \n"
++        "b sc26_fault_c  \n");
++}
++
++// ------------------------------------------------------------------ buttons
++enum { B_UP, B_DOWN, B_LEFT, B_RIGHT, B_CENTER, B_B, B_A, B_N };
++static const uint8_t btn_pin[B_N] = { PIN_BTN_UP, PIN_BTN_DOWN, PIN_BTN_LEFT, PIN_BTN_RIGHT,
++                                      PIN_BTN_CENTER, PIN_BTN_B, PIN_BTN_A };
++static int held_key[B_N];
++static uint32_t btn_prev;
++static uint64_t center_down_at;
++static bool center_combo;
++bool sc26_always_run = true;
++
++#define NPULSE 4
++static struct { int key; uint64_t up_at; } pulses[NPULSE];
++
++extern boolean menuactive;
++extern int messageToPrint;
++extern boolean messageNeedsInput;
++
++static void post(evtype_t t, int key) {
++    event_t e;
++    memset(&e, 0, sizeof e);
++    e.type = t;
++    e.data1 = key;
++    if (t == ev_keydown && key > 0 && key < 128) e.data2 = e.data3 = key;
++    D_PostEvent(&e);
++}
++
++static void pulse(int key) {        // key down now, up ~3 tics later (so G_BuildTiccmd sees it)
++    for (int i = 0; i < NPULSE; i++) if (!pulses[i].key) {
++        post(ev_keydown, key);
++        pulses[i].key = key;
++        pulses[i].up_at = time_us_64() + 100000;
++        return;
++    }
++}
++
++static int next_weapon_key(void) {
++    static const weapontype_t order[] = { wp_fist, wp_chainsaw, wp_pistol, wp_shotgun, wp_supershotgun,
++                                          wp_chaingun, wp_missile, wp_plasma, wp_bfg };
++    static const char keys[] = { '1', '1', '2', '3', '3', '4', '5', '6', '7' };
++    const int n = sizeof order / sizeof order[0];
++    player_t *p = &players[consoleplayer];
++    weapontype_t cur = p->pendingweapon != wp_nochange ? p->pendingweapon : p->readyweapon;
++    int idx = 0;
++    for (int i = 0; i < n; i++) if (order[i] == cur) idx = i;
++    for (int k = 1; k < n; k++) {
++        weapontype_t w = order[(idx + k) % n];
++        if (w == wp_supershotgun && gamemode != commercial) continue;
++        if (!p->weaponowned[w]) continue;
++        ammotype_t a = weaponinfo[w].ammo;
++        if (a != am_noammo && p->ammo[a] <= 0) continue;
++        return keys[(idx + k) % n];
++    }
++    return 0;
++}
++
++void sc26_input_init(void) {
++    for (int i = 0; i < B_N; i++) { gpio_init(btn_pin[i]); gpio_set_dir(btn_pin[i], GPIO_IN); gpio_pull_up(btn_pin[i]); }
++    leds_init();
++    memset(led_cur, 0, sizeof led_cur);
++    leds_push();
++}
++
++static uint32_t read_buttons(void) {
++    uint32_t in = gpio_get_all(), b = 0;
++    for (int i = 0; i < B_N; i++) if (!(in & (1u << btn_pin[i]))) b |= 1u << i;
++    return b;
++}
++
++// What a button press means right now. Returns a key to hold while the button is down,
++// 0 when the press was handled here (pulsed keys / toggles).
++static int map_press(int b, bool center_held) {
++    const bool in_menu = menuactive || messageToPrint;
++    const bool prompt = messageToPrint && messageNeedsInput;
++    if (center_held && !in_menu) {
++        switch (b) {
++            case B_LEFT:  return ',';                    // strafe left
++            case B_RIGHT: return '.';                    // strafe right
++            case B_UP:    { int k = next_weapon_key(); if (k) pulse(k); return 0; }
++            case B_DOWN:  pulse(KEY_TAB); return 0;      // automap
++            case B_B:     sc26_always_run = !sc26_always_run; return 0;
++            default: break;
++        }
++    }
++    switch (b) {
++        case B_UP:    return KEY_UPARROW;
++        case B_DOWN:  return KEY_DOWNARROW;
++        case B_LEFT:  return KEY_LEFTARROW;
++        case B_RIGHT: return KEY_RIGHTARROW;
++        case B_A:     return in_menu ? (prompt ? 'y' : KEY_ENTER) : KEY_RCTRL;      // fire
++        case B_B:     return in_menu ? (prompt ? 'n' : KEY_BACKSPACE) : ' ';         // use / open
++        default:      return 0;
++    }
++}
++
++// ------------------------------------------------------------------ core 1 NMI (freeze reports)
++static volatile bool c1_nmi_done;
++static volatile uint32_t c1_nmi_pc, c1_nmi_lr, c1_nmi_ipsr, c1_nmi_primask, c1_nvic[4];
++extern volatile uint32_t sc26_c1_last_alarm_us;
++extern uint32_t *sc26_c1_stack_lo, *sc26_c1_stack_hi;
++
++void __attribute__((used)) sc26_nmi_c(uint32_t *frame) {
++    uint32_t pm;
++    __asm volatile("mrs %0, primask" : "=r"(pm));
++    c1_nmi_pc = frame[6];
++    c1_nmi_lr = frame[5];
++    c1_nmi_ipsr = frame[7] & 0x1FFu;        // exception core 1 was in (0 = normal code)
++    c1_nmi_primask = pm;
++    c1_nvic[0] = nvic_hw->iser[0]; c1_nvic[1] = nvic_hw->iser[1];     // core 1's own NVIC
++    c1_nvic[2] = nvic_hw->ispr[0]; c1_nvic[3] = nvic_hw->ispr[1];
++    c1_nmi_done = true;
++    while (true) __wfe();                   // stay put; core 0 reboots the chip
++}
++
++void __attribute__((naked)) isr_nmi(void) {
++    __asm volatile(
++        "tst lr, #4      \n"
++        "ite eq          \n"
++        "mrseq r0, msp   \n"
++        "mrsne r0, psp   \n"
++        "b sc26_nmi_c    \n");
++}
++
++// ------------------------------------------------------------------ core 0 hang probe
++// A 2 Hz timer interrupt on core 0. If the game loop hasn't polled the buttons for 4 s, record
++// where core 0 is stuck (and what core 1 / the panel pump were doing) and reboot to SC26 OS.
++extern volatile uint32_t sc26_frames, sc26_recoveries, sc26_core1_pc;
++uint32_t sc26_pump_state(void);
++void sc26_pump_regs(uint32_t *out);
++static volatile uint32_t heartbeat;
++static uint probe_alarm;
++static uint32_t probe_next, probe_last_hb, probe_stuck;
++
++void __attribute__((used)) sc26_probe_c(uint32_t *frame) {
++    timer_hw->intr = 1u << probe_alarm;
++    probe_next += 500000;
++    if ((int32_t)(probe_next - timer_hw->timerawl) < 1000) probe_next = timer_hw->timerawl + 500000;
++    timer_hw->alarm[probe_alarm] = probe_next;
++    if (heartbeat != probe_last_hb) { probe_last_hb = heartbeat; probe_stuck = 0; return; }
++    if (++probe_stuck < 8) return;
++    bool halted = (syscfg_hw->proc_config & SYSCFG_PROC_CONFIG_PROC1_HALTED_BITS) != 0;
++    sio_hw->doorbell_out_set = 1;                     // -> NMI on core 1 (sc26_nmi_c)
++    for (int i = 0; i < 3000 && !c1_nmi_done; i++) busy_wait_us(1);
++    uint32_t free4 = 0;                               // core 1 stack never touched, in words
++    for (uint32_t *s = sc26_c1_stack_lo; s < sc26_c1_stack_hi && *s == 0x5C26C0DEu; s++) free4++;
++    if (free4 > 0xFFF) free4 = 0xFFF;
++    uint32_t ms = (timer_hw->timerawl - sc26_c1_last_alarm_us) / 1000;
++    if (ms > 0xFFF) ms = 0xFFF;
++    watchdog_hw->scratch[1] = frame[6];
++    watchdog_hw->scratch[2] = frame[5];
++    watchdog_hw->scratch[3] = c1_nmi_done ? c1_nmi_pc : sc26_core1_pc;
++    watchdog_hw->scratch[5] = c1_nmi_done ? c1_nmi_lr : 0;
++    watchdog_hw->scratch[6] = ((uint32_t)c1_nmi_done << 31) | ((uint32_t)halted << 30) | ((c1_nmi_primask & 1u) << 29) |
++                              ((sc26_pump_state() >> 31) << 28) | (free4 << 16) | (c1_nmi_ipsr & 0x1FFu);
++    watchdog_hw->scratch[7] = (ms << 20) | (sc26_frames & 0xFFFFFu);
++    // extra register dump in a RAM mailbox SC26 OS doesn't use (it survives the watchdog reboot)
++    {
++        volatile uint32_t *mb = (volatile uint32_t *)SC26_DIAG_MAILBOX;
++        uint32_t w[24], n = 0;
++        for (int i = 0; i < 4; i++) w[n++] = c1_nvic[i];
++        w[n++] = timer_hw->inte; w[n++] = timer_hw->intr; w[n++] = timer_hw->armed;
++        uint32_t pr[9];
++        sc26_pump_regs(pr);
++        for (int i = 0; i < 9; i++) w[n++] = pr[i];
++        w[n++] = pio1->fdebug; w[n++] = pio1->fstat;
++        w[n++] = timer_hw->timerawl; w[n++] = sc26_c1_last_alarm_us;
++        w[n++] = nvic_hw->iser[0]; w[n++] = nvic_hw->ispr[0];      // core 0's own NVIC
++        mb[1] = n;
++        for (uint32_t i = 0; i < n; i++) mb[2 + i] = w[i];
++        mb[2 + n] = crc32((const uint8_t *)w, n * 4);
++        mb[0] = 0x53433244u;                                         // "SC2D"
++    }
++    diag_set_magic(SC26_DIAG_HANG);
++    reboot_to_os();
++}
++
++static void __attribute__((naked)) probe_isr(void) {
++    __asm volatile(
++        "tst lr, #4      \n"
++        "ite eq          \n"
++        "mrseq r0, msp   \n"
++        "mrsne r0, psp   \n"
++        "b sc26_probe_c  \n");
++}
++
++static void probe_start(void) {
++    extern uint32_t __vectors[];
++    probe_alarm = (uint)hardware_alarm_claim_unused(true);
++    uint irq = TIMER_ALARM_IRQ_NUM(timer_hw, probe_alarm);
++    ((volatile uint32_t *)scb_hw->vtor)[16 + irq] = (uint32_t)probe_isr;
++    __dsb(); __isb();
++    irq_set_priority(irq, 0x00);           // above everything else on core 0
++    hw_set_bits(&timer_hw->inte, 1u << probe_alarm);
++    irq_set_enabled(irq, true);
++    probe_next = timer_hw->timerawl + 500000;
++    timer_hw->alarm[probe_alarm] = probe_next;
++}
++
++void sc26_input_poll(void) {
++    static bool first = true;
++    if (first) { first = false; sc26_stage(0, 7); probe_start(); }
++    heartbeat++;
++    watchdog_update();
++    uint64_t now = time_us_64();
++    for (int i = 0; i < NPULSE; i++)
++        if (pulses[i].key && now >= pulses[i].up_at) { post(ev_keyup, pulses[i].key); pulses[i].key = 0; }
++
++    uint32_t b = read_buttons();
++    uint32_t pressed = b & ~btn_prev, released = btn_prev & ~b;
++    const uint32_t C = 1u << B_CENTER;
++
++    // CENTER: tap = menu (Esc); modifier for strafe / weapon / map / run; hold alone 2 s = quit to SC26 OS
++    if (pressed & C) { center_down_at = now; center_combo = false; }
++    if ((b & C) && (b & ~C)) center_combo = true;
++    if ((b & C) && !center_combo && now - center_down_at > 2000000) sc26_exit_to_os();
++    if ((released & C) && !center_combo && now - center_down_at < 600000) pulse(KEY_ESCAPE);
++
++    for (int i = 0; i < B_N; i++) {
++        if (i == B_CENTER) continue;
++        uint32_t m = 1u << i;
++        if (pressed & m) {
++            int k = map_press(i, (b & C) != 0);
++            if (k) { post(ev_keydown, k); held_key[i] = k; }
++        }
++        if ((released & m) && held_key[i]) { post(ev_keyup, held_key[i]); held_key[i] = 0; }
++    }
++    btn_prev = b;
++}
++#endif
+diff --git a/src/pico/sc26_doom.h b/src/pico/sc26_doom.h
+new file mode 100644
+index 0000000..7a3c230
+--- /dev/null
++++ b/src/pico/sc26_doom.h
+@@ -0,0 +1,53 @@
++// SC26 badge port glue for rp2040-doom (GPL-2.0+, like the rest of this tree).
++// Replaces VGA/scanvideo output with the badge's 360x360 ST77916 QSPI panel, maps the
++// 7 buttons to Doom keys, drives the 9-LED ring, and makes flash saves work when this
++// image is chain-booted from the middle of flash by SC26 OS.
++#pragma once
++#include <stdint.h>
++#include <stdbool.h>
++#include "pico.h"
++
++#if SC26_BOARD
++// Flash slot this image lives in (see SC26 OS flash_layout.h): image 512 KB, WHD after it,
++// save games grow down from the end of the slot.
++#define SC26_DOOM_SIZE      0x680000u
++#define SC26_WHD_OFFSET     0x080000u           // relative to the slot start
++
++// where the 320x200 picture sits on the round 360x360 panel
++#define SC26_VIEW_X 20
++#define SC26_VIEW_Y 70
++
++void sc26_early_init(void);                     // first thing in main(): address translation, LEDs off
++void sc26_lcd_init(void);                       // panel + PIO + DMA (call on core1, after clock setup)
++void sc26_lcd_begin_pixels(int x, int y, int w, int h);
++void sc26_lcd_start_dma(const void *src, uint32_t bytes);
++void sc26_lcd_end_pixels(void);
++void sc26_backlight(int percent);
++extern int sc26_lcd_dma;
++
++uint32_t sc26_flash_slot_base(void);            // physical flash offset of this image
++bool sc26_flash_offset_ok(uint32_t logical_offs);
++
++void sc26_input_init(void);
++void sc26_input_poll(void);                     // call every tic: buttons -> Doom events
++void sc26_leds_update(void);                    // called by the video code with fresh colours
++void sc26_set_led_target(int i, uint8_t r, uint8_t g, uint8_t b);
++void sc26_exit_to_os(void) __attribute__((noreturn));
++extern bool sc26_always_run;
++
++// Diagnostics for SC26 OS (it writes DOOMLOG.TXT after the reboot). Kept in the watchdog
++// scratch registers, which survive a watchdog reboot:
++//   scratch0 = magic<<24 | core1 stage<<16 | core0 stage<<8 | faulting core
++//   scratch1 = PC / message address, scratch2 = LR / caller, scratch3 = CFSR
++#define SC26_DIAG_RUN   0xD0u    // running (seen by SC26 OS => watchdog fired: a hang)
++#define SC26_DIAG_FAULT 0xDFu    // hard fault
++#define SC26_DIAG_ERROR 0xDEu    // I_Error(): scratch1 = format string
++#define SC26_DIAG_PANIC 0xDCu    // SDK panic(): scratch1 = format string
++#define SC26_DIAG_QUIT  0xDAu    // normal quit
++#define SC26_DIAG_HANG  0xDBu    // core 0 stopped polling: scratch1/2 = its PC/LR, scratch3 = core 1 PC,
++                                 // scratch5 = panel pump state, scratch6 = frames shown, scratch7 = pump resets
++void sc26_lcd_recover(void);
++#define SC26_DIAG_MAILBOX 0x20078000u     // RAM above SC26 OS's .bss: [magic, n, words..., crc]
++void sc26_stage(int core, int stage);
++void sc26_error(const char *fmt, ...) __attribute__((noreturn));
++#endif

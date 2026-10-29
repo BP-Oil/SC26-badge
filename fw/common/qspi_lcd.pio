@@ -1,0 +1,30 @@
+; QSPI write-only LCD interface (same program the original firmware used).
+; 4 data bits per clock on D0..D3, clock on one side-set pin, SPI mode 0.
+; Autopull 8 bits, MSB first: each FIFO byte = 2 clocks (high nibble first).
+; For 1-bit "single line" phases the driver expands each bit into a nibble on D0.
+
+.program qspi_lcd
+.side_set 1 opt
+.wrap_target
+    out pins, 4   side 0      ; present nibble, clock low (also idles here when FIFO empty)
+    nop           side 1      ; rising edge: panel samples
+.wrap
+
+% c-sdk {
+static inline void qspi_lcd_program_init(PIO pio, uint sm, uint offset,
+                                         uint pin_clk, uint pin_d0, float clkdiv) {
+    pio_sm_config c = qspi_lcd_program_get_default_config(offset);
+    sm_config_set_out_pins(&c, pin_d0, 4);
+    sm_config_set_sideset_pins(&c, pin_clk);
+    sm_config_set_out_shift(&c, false, true, 8);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    sm_config_set_clkdiv(&c, clkdiv);
+    for (uint i = 0; i < 4; i++) pio_gpio_init(pio, pin_d0 + i);
+    pio_gpio_init(pio, pin_clk);
+    pio_sm_set_pins_with_mask(pio, sm, 0, (0xFu << pin_d0) | (1u << pin_clk));
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_d0, 4, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_clk, 1, true);
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
