@@ -37,6 +37,7 @@ add_executable(sc26_gif
     gifplayer/main.c
     gifplayer/gif_player.c
     gifplayer/ambient.c
+    gifplayer/scenes.c
     gifplayer/usb_glue.c
     gifplayer/usb_descriptors.c
     gifplayer/diskio.c

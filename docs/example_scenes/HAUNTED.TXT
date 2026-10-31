@@ -1,0 +1,14 @@
+# HAUNTED - pumpkin glow with ghostly purple drifting up the sides
+# 5 colours per line = nose + right side (top -> fin), mirrored onto the left side
+step 160
+fade 140
+#  nose    side 1   side 2   side 3   fin
+   200040  -        -        FF5000   FF7A00
+   400080  200040   -        FF5000   FF6000
+   -       400080   200040   FF4000   FF7A00
+   -       -        400080   803000   FF5000
+   -       -        200040   FF5000   FF7A00
+   200040  -        -        FF6000   FF5000   @300
+# a sudden flicker, like a candle guttering
+   -       -        -        401800   601C00   @60
+   200040  -        -        FF6000   FF7A00

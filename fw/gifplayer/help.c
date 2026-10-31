@@ -52,8 +52,9 @@ static const hpage_t pages[] = {
         {'K', "B|hold", "swap LED sides"},
         {'K', "A+B|hold", "update mode"},
         {'G'},
-        {'N', 0, "LEDs: original, ambient"},
-        {'N', 0, "(follow the GIF) or off"},
+        {'N', 0, "LEDs: original, ambient,"},
+        {'N', 0, "scenes or off. Menu ->"},
+        {'N', 0, "LED SCENES to pick one"},
     } },
     { "MENU", NULL, {
         {'K', "CENTER|hold", "open the menu"},

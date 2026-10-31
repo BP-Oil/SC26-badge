@@ -13,13 +13,15 @@
 //                    original firmware, update mode
 //   A (tap)          pause / resume
 //   A (hold 1 s)     STAY on this GIF (no auto-advance) <-> auto-advance; L/R still change GIF
-//   B (tap)          LED mode: original -> ambient -> off
+//   B (tap)          LED mode: original -> ambient -> scenes -> off
+//                    (Menu -> LED SCENES picks the scene, speed and brightness)
 //   B (hold 1.5 s)   swap the LED sides (if ambient colours look swapped left/right)
 //   A + B (hold 2 s) reboot into BOOTSEL (USB bootloader) for firmware updates
 // Also: opening the USB serial port at 1200 baud reboots into BOOTSEL.
 // The current GIF, STAY, brightness, zoom and LED settings survive power-off (settings.c).
 
 #include <stdio.h>
+#include <math.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -31,6 +33,7 @@
 #include "flash_disk.h"
 #include "gif_player.h"
 #include "ambient.h"
+#include "scenes.h"
 #include "usb_glue.h"
 #include "settings.h"
 #include "flash_layout.h"
@@ -66,7 +69,7 @@ static bool    fs_mounted;
 static entry_t files[MAX_FILES];
 static int     nfiles, cur = -1;
 
-typedef enum { ST_PLAY, ST_EMPTY, ST_RECEIVING, ST_ERROR, ST_MENU, ST_HELP } state_t;
+typedef enum { ST_PLAY, ST_EMPTY, ST_RECEIVING, ST_ERROR, ST_MENU, ST_HELP, ST_SCENES } state_t;
 static state_t state;
 static zoom_t  zoom = ZOOM_AUTO;
 static bool    paused;
@@ -87,13 +90,17 @@ static uint32_t name_hash(const char *s) {
     return h;
 }
 
-static void save_settings(void) {
+// blob: the scene loop recorded for DOOM (see scenes_record_loop), or NULL
+static void save_settings_with(const uint8_t *blob, size_t blob_len) {
     settings_t s = {0};
     s.stay = stay; s.led_mode = (uint8_t)ambient_mode(); s.brightness = (uint8_t)brightness;
     s.zoom = (uint8_t)zoom; s.ring_cw = ambient_clockwise();
+    snprintf(s.scene, sizeof s.scene, "%s", scenes_name(scenes_current()));
+    s.scene_speed = (uint8_t)scenes_speed_idx(); s.scene_bright = scenes_brightness();
     if (cur >= 0 && cur < nfiles) snprintf(s.gif, sizeof s.gif, "%s", files[cur].name);
-    settings_changed(&s);
+    settings_changed(&s, blob, blob_len);
 }
+static void save_settings(void) { save_settings_with(NULL, 0); }
 
 static int find_file(const char *name) {
     for (int i = 0; i < nfiles; i++) if (strcasecmp(files[i].name, name) == 0) return i;
@@ -310,6 +317,7 @@ static void drive_state(void) {
         if (cur >= 0 && cur < nfiles) snprintf(was, sizeof was, "%s", files[cur].name);
         fs_mount_or_format();
         scan_files();
+        if (fs_mounted) scenes_scan();      // new or edited LEDS/*.TXT files
         int pick = -1; uint32_t newest_stamp = 0;
         for (int i = 0; i < nfiles; i++) {
             uint32_t h = name_hash(files[i].name);
@@ -333,9 +341,9 @@ static uint32_t swallow;             // buttons still held from the menu: ignore
 static int      help_page;
 
 // ------------------------------------------------------------------ menu
-typedef enum { MI_GIFS, MI_HELP, MI_NES, MI_DOOM, MI_ORIG, MI_UPDATE } mi_kind_t;
+typedef enum { MI_GIFS, MI_HELP, MI_SCENES, MI_NES, MI_DOOM, MI_ORIG, MI_UPDATE } mi_kind_t;
 typedef struct { mi_kind_t kind; char label[30]; char path[NAME_LEN + 8]; } mitem_t;
-static mitem_t mitems[MAX_FILES + 5];
+static mitem_t mitems[MAX_FILES + 6];
 static int     mcount, msel, mtop;
 #define MENU_ROWS 7
 #define MENU_Y0   92
@@ -363,6 +371,7 @@ static void menu_build(void) {
     mcount = 0;
     menu_add(MI_GIFS, "GIF PLAYER", NULL);
     menu_add(MI_HELP, "HOW TO USE", NULL);
+    menu_add(MI_SCENES, "LED SCENES", NULL);
     int first_game = mcount;
     DIR dir; FILINFO fi;
     if (fs_mounted && f_opendir(&dir, "GAMES") == FR_OK) {
@@ -426,11 +435,134 @@ static void back_to_gifs(void) {
     swallow = buttons_read();
 }
 
+// ------------------------------------------------------------------ LED SCENES page
+// UP/DOWN pick a row, LEFT/RIGHT change it. Leaving saves the choice straight to flash and
+// sets the LED mode to SCENES: A or CENTER back to the GIFs, B back to the menu. The LEDs run the scene live while you browse, and the
+// screen shows the same nine LEDs laid out like the rocket.
+typedef enum { SR_SCENE, SR_SPEED, SR_BRIGHT, SR_COUNT } srow_t;
+static int        srow, spick;                // row under the cursor, scene shown in the list
+static char       scene_err[40];
+static uint64_t   next_preview_us;
+#define SP_CX     180
+#define SP_CY     136
+#define SP_DOT    20                           // dot size in px
+#define SR_Y0     212
+#define SR_DY     25
+
+static void scenes_draw_rows(void) {
+    lcd_blit_wait();
+    for (int r = 0; r < SR_COUNT; r++) {
+        int y = SR_Y0 + r * SR_DY;
+        char val[30], line[44];
+        switch (r) {
+        case SR_SCENE:  snprintf(val, sizeof val, "%.14s%s", scenes_name(spick), scenes_is_custom(spick) ? "*" : ""); break;
+        case SR_SPEED:  snprintf(val, sizeof val, "%d%%", scenes_speed_pct(scenes_speed_idx())); break;
+        default:        snprintf(val, sizeof val, "%d%%", scenes_brightness()); break;
+        }
+        static const char *lbl[SR_COUNT] = { "SCENE", "SPEED", "BRIGHT" };
+        bool sel = r == srow;
+        snprintf(line, sizeof line, sel ? "%s: < %s >" : "%s: %s", lbl[r], val);
+        lcd_fill_rect(48, y - 3, LCD_WIDTH - 96, SR_DY - 1, sel ? COL_ACC : COL_BG);
+        lcd_draw_text((LCD_WIDTH - lcd_text_width(line, 1)) / 2, y, line, sel ? COL_BG : COL_FG, sel ? COL_ACC : COL_BG, 1);
+    }
+    lcd_fill_rect(60, 300, LCD_WIDTH - 120, 21, COL_BG);
+    if (scene_err[0]) text_center(301, scene_err, RGB565(255, 90, 60), 1);
+    else              text_center(301, "A or B: SAVE", COL_DIM, 1);
+}
+
+static void scenes_draw_page(void) {
+    lcd_blit_wait();
+    lcd_fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COL_BG);
+    text_center(34, "LED SCENES", COL_ACC, 2);
+    scenes_draw_rows();
+}
+
+// One round dot of colour (r,g,b) centred on (cx,cy), anti-aliased against black.
+static void scenes_draw_dot(int cx, int cy, uint8_t r, uint8_t g, uint8_t b) {
+    static uint16_t px[SP_DOT * SP_DOT];
+    const float rad = SP_DOT / 2.0f;
+    for (int y = 0; y < SP_DOT; y++)
+        for (int x = 0; x < SP_DOT; x++) {
+            float dx = x + 0.5f - rad, dy = y + 0.5f - rad;
+            float a = rad - sqrtf(dx * dx + dy * dy);          // >0 inside, 1 px soft edge
+            a = a < 0 ? 0 : a > 1 ? 1 : a;
+            // keep a faint ring so an unlit LED still shows where it is
+            float ring = (a > 0 && a < 1) ? 0.18f : 0.0f;
+            px[y * SP_DOT + x] = RGB565_BE((uint8_t)(r * a + 255 * ring * (1 - a)),
+                                           (uint8_t)(g * a + 255 * ring * (1 - a)),
+                                           (uint8_t)(b * a + 255 * ring * (1 - a)));
+        }
+    lcd_blit(cx - SP_DOT / 2, cy - SP_DOT / 2, SP_DOT, SP_DOT, px);
+}
+
+static void scenes_preview(void) {
+    if (now_us() < next_preview_us) return;
+    next_preview_us = now_us() + 33000;        // ~30 fps is plenty for a preview
+    scene_out_t o;
+    if (!ambient_last_scene(&o)) return;
+    lcd_blit_wait();
+    for (int i = 0; i < WS2812_COUNT; i++) {
+        float x, y;
+        scenes_led_pos(i, &x, &y);
+        scenes_draw_dot(SP_CX + (int)(x * 62), SP_CY + (int)(y * 46), o.view[i][0], o.view[i][1], o.view[i][2]);
+    }
+}
+
+static void scenes_open(void) {
+    if (fs_mounted) scenes_scan();
+    if (ambient_mode() != LEDMODE_SCENE) ambient_set_mode(LEDMODE_SCENE);   // live preview
+    spick = scenes_current();
+    srow = SR_SCENE;
+    scene_err[0] = 0;
+    state = ST_SCENES;
+    next_preview_us = 0;
+    scenes_draw_page();
+}
+
+static void scenes_buttons(uint32_t down) {
+    if (down & BTN_UP)   { srow = (srow + SR_COUNT - 1) % SR_COUNT; scenes_draw_rows(); }
+    if (down & BTN_DOWN) { srow = (srow + 1) % SR_COUNT; scenes_draw_rows(); }
+    int d = (down & BTN_RIGHT) ? 1 : (down & BTN_LEFT) ? -1 : 0;
+    if (d) {
+        switch (srow) {
+        case SR_SCENE: {
+            int n = scenes_count();
+            spick = (spick + d + n) % n;
+            scene_err[0] = 0;
+            scenes_select(spick, scene_err, sizeof scene_err);   // on error the old scene keeps running
+            break; }
+        case SR_SPEED:  scenes_set_speed_idx(scenes_speed_idx() + d); break;
+        default: {
+            int b = scenes_brightness() + d * (scenes_brightness() + d * 5 <= 20 ? 5 : 10);
+            scenes_set_brightness((uint8_t)(b < 5 ? 5 : b > 100 ? 100 : b));
+            break; }
+        }
+        save_settings();
+        scenes_draw_rows();
+    }
+    if (down & (BTN_A | BTN_B | BTN_CENTER)) {
+        if (scene_err[0] && !(down & BTN_B)) return;   // the highlighted file didn't load
+        if (ambient_mode() != LEDMODE_SCENE) ambient_set_mode(LEDMODE_SCENE);
+        save_settings();
+        settings_flush();                      // write it now, not 3 s later
+        if (down & BTN_B) {
+            state = ST_MENU;
+            menu_draw();
+            return;
+        }
+        back_to_gifs();
+        show_overlay("SAVED: %s", scenes_name(scenes_current()));
+    }
+}
+
 static void menu_launch(const mitem_t *it) {
     char err[48] = "";
     switch (it->kind) {
     case MI_GIFS:
         back_to_gifs();
+        return;
+    case MI_SCENES:
+        scenes_open();
         return;
     case MI_HELP:
         state = ST_HELP;
@@ -441,11 +573,8 @@ static void menu_launch(const mitem_t *it) {
         screen_message("LOADING", it->label, "", COL_ACC);
         const uint8_t *rom = nescache_load(it->path, err, sizeof err, nes_progress);
         if (!rom) { screen_message("CAN'T START", it->label, err, RGB565(255, 90, 60)); sleep_ms(2500); menu_draw(); return; }
-        led_mode_t prev = ambient_mode();
-        if (prev != LEDMODE_OFF) ambient_set_mode(LEDMODE_AMBIENT);   // screen-reactive LEDs in games
         printf("nes: start %s\n", it->path);
-        nes_run(rom);
-        ambient_set_mode(prev);
+        nes_run(rom);                     // the LEDs keep whatever mode you chose
         btn_prev = buttons_read();
         menu_draw();
         return; }
@@ -454,6 +583,13 @@ static void menu_launch(const mitem_t *it) {
         bool doom = it->kind == MI_DOOM;
         if (doom) screen_message("DOOM", "loading ...", "hold CENTER 2 s to quit", COL_ACC);
         else      screen_message("STARTING", it->label, "unplug & replug to return to SC26", COL_ACC);
+        ambient_scenes_live(false);       // stop the scene timer before handing over the LEDs
+        if (doom && ambient_mode() == LEDMODE_SCENE) {
+            // DOOM plays the scene from a short recorded loop (it has no floating point)
+            static uint8_t loop[SETTINGS_BLOB_MAX];
+            size_t n = scenes_record_loop(loop, sizeof loop, to_ms_since_boot(get_absolute_time()));
+            save_settings_with(loop, n);
+        }
         settings_flush();
         flashdisk_flush();
         tud_disconnect();                 // the other image doesn't speak USB: let the computer know
@@ -462,6 +598,7 @@ static void menu_launch(const mitem_t *it) {
         int rc = doom ? chain_boot(DOOM_OFFSET, DOOM_SIZE) : chain_boot(ORIG_OFFSET, ORIG_SIZE);
         if (doom && rc < 0) rc = chain_boot(DOOM_OFFSET, 0x400000);   // DOOM maps the rest of its slot itself
         tud_connect();
+        ambient_scenes_live(true);
         snprintf(err, sizeof err, "boot ROM error %d", rc);
         screen_message("CAN'T START", it->label, err, RGB565(255, 90, 60));
         sleep_ms(2500); menu_draw();
@@ -505,9 +642,11 @@ static void handle_buttons(void) {
     uint64_t t = now_us();
     for (int i = 0; i < BTN_COUNT; i++) if (down & (1u << i)) press_t[i] = t;
 
-    if (state == ST_MENU || state == ST_HELP) {
+    if (state == ST_MENU || state == ST_HELP || state == ST_SCENES) {
         if (!(b & BTN_CENTER)) c_long_fired = false;   // the hold that opened the menu is over
-        if (state == ST_MENU) menu_buttons(b, down); else help_buttons(down);
+        if (state == ST_MENU) menu_buttons(b, down);
+        else if (state == ST_SCENES) scenes_buttons(down);
+        else help_buttons(down);
         btn_prev = buttons_read() & ~swallow;
         return;
     }
@@ -573,9 +712,10 @@ static void handle_buttons(void) {
     }
     if (up & BTN_B) {
         if (!b_long_fired) {
-            led_mode_t m = (led_mode_t)((ambient_mode() + 1) % LEDMODE_COUNT);
+            led_mode_t m = ambient_next_mode(ambient_mode());
             ambient_set_mode(m);
-            show_overlay("LEDS: %s", ambient_mode_name(m));
+            if (m == LEDMODE_SCENE) show_overlay("LEDS: %s", scenes_name(scenes_current()));
+            else show_overlay("LEDS: %s", ambient_mode_name(m));
             save_settings();
         }
         b_long_fired = false;
@@ -714,6 +854,13 @@ int main(void) {
     lcd_init_ex(1.0f);                // 75 MHz QSPI, same as the original firmware
     lcd_backlight(brightness);
     ambient_init();
+    scenes_init();
+    if (have_cfg) {
+        scenes_set_speed_idx(cfg.scene_speed);
+        scenes_set_brightness(cfg.scene_bright);
+        int si = scenes_find(cfg.scene);             // built-in names resolve now, files after mount
+        if (si >= 0) scenes_select(si, NULL, 0);
+    }
     ambient_set_mode(have_cfg && cfg.led_mode < LEDMODE_COUNT ? (led_mode_t)cfg.led_mode : LEDMODE_ORIGINAL);
     ambient_set_clockwise(have_cfg ? cfg.ring_cw : false);   // SAINTCON rocket: LEDs 8,0,1,2 run down the LEFT side
 
@@ -726,6 +873,12 @@ int main(void) {
     if (fs_ok) {
         write_sysinfo();
         scan_files();
+        if (scenes_make_example()) flashdisk_flush();   // first run: LEDS/ with example scenes
+        scenes_scan();
+        if (have_cfg && cfg.scene[0] && scenes_find(cfg.scene) >= 0) {
+            char e[40];
+            if (!scenes_select(scenes_find(cfg.scene), e, sizeof e)) printf("scene %s: %s\n", cfg.scene, e);
+        }
         doom_report();
         menu_build();
         int games = 0;
@@ -746,8 +899,11 @@ int main(void) {
     bios_wait(500, tud_task);
     boot_splash(tud_task, (uint8_t)brightness);
     ambient_set_mode(ambient_mode());       // hand the LED ring back to the chosen mode
+    ambient_scenes_live(true);              // SCENES mode now animates from its own timer
     int first = have_cfg && cfg.gif[0] ? find_file(cfg.gif) : -1;
     start_file(first < 0 ? 0 : first);
+    save_settings();                        // rewrites older settings layouts (DOOM reads this);
+                                            // a no-op when nothing changed
     if (state == ST_PLAY) {                 // first GIF after power-up: point at the menu / help
         show_overlay("%s", "HOLD CENTER: MENU/HELP");
         overlay_until_us = now_us() + 5000000;
@@ -766,6 +922,8 @@ int main(void) {
         if (state == ST_PLAY) {
             lcd_blit_wait();
             play_step();
+        } else if (state == ST_SCENES) {
+            scenes_preview();
         } else if (state == ST_ERROR && nfiles > 1 && now_us() - play_started_us > 3000000) {
             start_file(cur + 1);
         }
