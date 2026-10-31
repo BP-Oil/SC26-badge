@@ -1,5 +1,5 @@
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index a752924..d453274 100644
+index a7529243..d453274e 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -566,7 +566,7 @@ function(add_doom_tiny SUFFIX RENDER_LIB)
@@ -30,7 +30,7 @@ index a752924..d453274 100644
          suppress_tinyusb_warnings()
          add_doom_tiny(_usb render_newhope)
 diff --git a/src/doom/g_game.c b/src/doom/g_game.c
-index f38b5e5..26fcfe4 100644
+index f38b5e57..26fcfe46 100644
 --- a/src/doom/g_game.c
 +++ b/src/doom/g_game.c
 @@ -397,8 +397,14 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
@@ -49,7 +49,7 @@ index f38b5e5..26fcfe4 100644
           || joybspeed >= MAX_JOY_BUTTONS
           || joybuttons[joybspeed]
 diff --git a/src/doom/p_saveg.c b/src/doom/p_saveg.c
-index 97d8a6c..79ec8b4 100644
+index 97d8a6ca..79ec8b4c 100644
 --- a/src/doom/p_saveg.c
 +++ b/src/doom/p_saveg.c
 @@ -2644,6 +2644,12 @@ void P_UnArchiveSpecials (void)
@@ -74,7 +74,7 @@ index 97d8a6c..79ec8b4 100644
  void P_SaveGameGetExistingFlashSlotAddresses(flash_slot_info_t *slots, int count) {
      const uint8_t *index = get_end_of_flash() - 4;
 diff --git a/src/i_main.c b/src/i_main.c
-index 13fe30a..c6acd38 100644
+index 13fe30a5..c6acd385 100644
 --- a/src/i_main.c
 +++ b/src/i_main.c
 @@ -43,6 +43,9 @@
@@ -128,7 +128,7 @@ index 13fe30a..c6acd38 100644
  
      return 0;
 diff --git a/src/i_sound.c b/src/i_sound.c
-index face8cb..f046be8 100644
+index face8cbb..f046be87 100644
 --- a/src/i_sound.c
 +++ b/src/i_sound.c
 @@ -60,9 +60,14 @@ should_be_const constcharstar snd_musiccmd = "";
@@ -147,7 +147,7 @@ index face8cb..f046be8 100644
  // Low-level sound and music modules we are using
  static const sound_module_t *sound_module;
 diff --git a/src/i_system.h b/src/i_system.h
-index 1609526..59001e2 100644
+index 16095263..59001e25 100644
 --- a/src/i_system.h
 +++ b/src/i_system.h
 @@ -63,8 +63,14 @@ void I_Error (const char *error, ...) NORETURN PRINTF_ATTR(1, 2);
@@ -166,7 +166,7 @@ index 1609526..59001e2 100644
  #if DOOM_TINY
  #include "pico/sem.h"
 diff --git a/src/pico/CMakeLists.txt b/src/pico/CMakeLists.txt
-index 4c470b0..f3f0a8f 100644
+index 4c470b0f..f3f0a8fe 100644
 --- a/src/pico/CMakeLists.txt
 +++ b/src/pico/CMakeLists.txt
 @@ -39,6 +39,19 @@ target_compile_definitions(common_pico INTERFACE
@@ -190,7 +190,7 @@ index 4c470b0..f3f0a8f 100644
  
  add_library(pico_cd INTERFACE)
 diff --git a/src/pico/i_input.c b/src/pico/i_input.c
-index 1ac1e1f..9063f48 100644
+index 1ac1e1f1..9063f481 100644
 --- a/src/pico/i_input.c
 +++ b/src/pico/i_input.c
 @@ -511,7 +511,16 @@ static void pico_quit(void) {
@@ -224,7 +224,7 @@ index 1ac1e1f..9063f48 100644
      if (uart_is_readable(uart_default)) {
          char c = uart_getc(uart_default);
 diff --git a/src/pico/i_picosound.c b/src/pico/i_picosound.c
-index 5b00701..49e5f22 100644
+index 5b00701b..49e5f223 100644
 --- a/src/pico/i_picosound.c
 +++ b/src/pico/i_picosound.c
 @@ -481,6 +481,7 @@ void I_PicoSoundSetMusicGenerator(void (*generator)(audio_buffer_t *buffer)) {
@@ -236,7 +236,7 @@ index 5b00701..49e5f22 100644
      fade_level = in ? FADE_STEP : 0x10000 - FADE_STEP;
  }
 diff --git a/src/pico/i_system.c b/src/pico/i_system.c
-index cd05c64..7a5425f 100644
+index cd05c644..7a5425fa 100644
 --- a/src/pico/i_system.c
 +++ b/src/pico/i_system.c
 @@ -464,8 +464,14 @@ void handle_exit_key_down(int scancode, bool shift, uint8_t *kb_buffer, int kb_l
@@ -255,7 +255,7 @@ index cd05c64..7a5425f 100644
  #if USE_PICO_NET
      piconet_stop();
 diff --git a/src/pico/i_video.c b/src/pico/i_video.c
-index 15bb9d7..c5fb44f 100644
+index 15bb9d7c..c5fb44fe 100644
 --- a/src/pico/i_video.c
 +++ b/src/pico/i_video.c
 @@ -57,6 +57,21 @@
@@ -597,7 +597,7 @@ index 15bb9d7..c5fb44f 100644
      disallow_core1_malloc = true;
  #endif
 diff --git a/src/pico/picoflash.c b/src/pico/picoflash.c
-index 42edff7..e2ef048 100644
+index 42edff7d..e2ef048e 100644
 --- a/src/pico/picoflash.c
 +++ b/src/pico/picoflash.c
 @@ -36,7 +36,14 @@ static void __no_inline_not_in_flash_func(flash_enable_xip_via_boot2)(const uint
@@ -616,7 +616,7 @@ index 42edff7..e2ef048 100644
      rom_flash_exit_xip_fn flash_exit_xip = (rom_flash_exit_xip_fn)rom_func_lookup_inline(ROM_FUNC_FLASH_EXIT_XIP);
      rom_flash_range_program_fn flash_range_program = (rom_flash_range_program_fn)rom_func_lookup_inline(ROM_FUNC_FLASH_RANGE_PROGRAM);
 diff --git a/src/pico/piconet.c b/src/pico/piconet.c
-index f0c9aa6..7b4ffbb 100644
+index f0c9aa68..7b4ffbb1 100644
 --- a/src/pico/piconet.c
 +++ b/src/pico/piconet.c
 @@ -10,7 +10,8 @@
@@ -631,10 +631,10 @@ index f0c9aa6..7b4ffbb 100644
  #include "hardware/timer.h"
 diff --git a/src/pico/sc26_doom.c b/src/pico/sc26_doom.c
 new file mode 100644
-index 0000000..2aa91ef
+index 00000000..019eadbd
 --- /dev/null
 +++ b/src/pico/sc26_doom.c
-@@ -0,0 +1,578 @@
+@@ -0,0 +1,629 @@
 +// SC26 badge port glue for rp2040-doom. See sc26_doom.h.
 +//
 +// Copyright(C) 2026 SC26 badge port. GPL-2.0-or-later, like the rest of this tree.
@@ -686,14 +686,41 @@ index 0000000..2aa91ef
 +    return ~c;
 +}
 +
++// LED-scenes record written by SC26 OS at offset 512 of the same sector (fw/gifplayer/settings.c).
++// When DOOM is started in SCENES mode, SC26 OS records the scene as a short seamless loop right
++// after it: u16 interval_ms, u16 n, n x 27 bytes (physical LED order, ready to send), then a
++// crc of the loop. Playing it back needs no floating point, which this build doesn't have.
++#define SC26_SCENES_MAGIC 0x454E4353u            // "SCNE"
++typedef struct { char scene[24]; uint8_t speed, bright; uint16_t blob_len; } os_scene_rec_t;
++typedef struct { uint32_t magic, version; os_scene_rec_t r; uint32_t crc; } os_stored_scene_t;
++static const uint8_t *scene_loop;               // frames, read straight from flash
++static uint32_t scene_iv, scene_n;
++
++static void read_os_scene(const uint8_t *sector) {
++    const os_stored_scene_t *sc = (const os_stored_scene_t *)(sector + 512);
++    if (sc->magic != SC26_SCENES_MAGIC || sc->version != 1 ||
++        sc->crc != crc32((const uint8_t *)&sc->r, sizeof sc->r)) return;
++    uint32_t len = sc->r.blob_len;
++    if (len < 4 || 512 + sizeof *sc + len + 4 > 4096) return;
++    const uint8_t *blob = sector + 512 + sizeof *sc;
++    uint32_t bc;
++    memcpy(&bc, blob + len, 4);
++    if (bc != crc32(blob, len)) return;
++    uint32_t iv = blob[0] | blob[1] << 8, n = blob[2] | blob[3] << 8;
++    if (iv < 10 || n < 2 || 4 + n * WS2812_COUNT * 3 > len) return;
++    scene_iv = iv; scene_n = n; scene_loop = blob + 4;
++}
++
 +static void read_os_settings(void) {
 +    const os_stored_t *st = (const os_stored_t *)(XIP_NOCACHE_NOALLOC_NOTRANSLATE_BASE + SC26_SETTINGS_PHYS);
 +    if (st->magic == 0x53433236u && st->version == 1 && st->crc == crc32((const uint8_t *)&st->s, sizeof st->s)) {
 +        os_brightness = (st->s.brightness >= 10 && st->s.brightness <= 100) ? st->s.brightness : 100;
 +        os_led_mode = st->s.led_mode;
 +        os_ring_cw = st->s.ring_cw;
++        read_os_scene((const uint8_t *)st);   // the LED scene loop, if any
 +    }
 +}
++
 +
 +// ------------------------------------------------------------------ flash slot / address translation
 +static uint32_t slot_base;
@@ -896,8 +923,32 @@ index 0000000..2aa91ef
 +    led_tgt[i][0] = r; led_tgt[i][1] = g; led_tgt[i][2] = b;
 +}
 +
++// The ring follows the LED mode chosen in SC26 OS: 0 original sweep, 1 ambient (follows the
++// screen), 2 off, 3 scene (the recorded loop; ambient if there is none). Called once per frame
++// by the video code.
 +void sc26_leds_update(void) {
 +    if (os_led_mode == 2) return;                    // LEDs off in SC26 OS -> off here too
++    uint32_t ms = time_us_32() / 1000;
++    if (os_led_mode == 3 && scene_loop) {            // the scene recorded by SC26 OS
++        uint32_t pos = ms % (scene_iv * scene_n);
++        uint32_t i = pos / scene_iv, f = (pos % scene_iv) * 256 / scene_iv;   // blend 0..255
++        const uint8_t *a = scene_loop + i * (WS2812_COUNT * 3);
++        const uint8_t *b = scene_loop + ((i + 1) % scene_n) * (WS2812_COUNT * 3);
++        for (int k = 0; k < WS2812_COUNT * 3; k++)
++            led_cur[k / 3][k % 3] = (int16_t)((a[k] * (256 - f) + b[k] * f) >> 8);
++        leds_push();
++        return;
++    }
++    if (os_led_mode == 0) {                          // the stock badge's purple sweep, 170 ms steps
++        static const uint16_t masks[5] = { 0x080, 0x140, 0x021, 0x012, 0x00C };
++        uint16_t m = masks[(ms / 170) % 5];
++        for (int i = 0; i < WS2812_COUNT; i++) {
++            int16_t v = (m >> i) & 1 ? 16 : 0;
++            led_cur[i][0] = v; led_cur[i][1] = 0; led_cur[i][2] = v;
++        }
++        leds_push();
++        return;
++    }
 +    for (int i = 0; i < WS2812_COUNT; i++)
 +        for (int c = 0; c < 3; c++) {
 +            led_cur[i][c] += (int16_t)((led_tgt[i][c] - led_cur[i][c]) * 3 / 8);
@@ -1215,7 +1266,7 @@ index 0000000..2aa91ef
 +#endif
 diff --git a/src/pico/sc26_doom.h b/src/pico/sc26_doom.h
 new file mode 100644
-index 0000000..7a3c230
+index 00000000..7a3c230b
 --- /dev/null
 +++ b/src/pico/sc26_doom.h
 @@ -0,0 +1,53 @@

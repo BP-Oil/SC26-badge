@@ -22,6 +22,7 @@
 #include "leds.h"
 #include "ambient.h"
 #include "board_sc26.h"
+#include "scenes.h"
 
 static const uint16_t orig_masks[5] = { 0x080, 0x140, 0x021, 0x012, 0x00C };
 #define ORIG_STEP_MS   170
@@ -34,10 +35,54 @@ static float      target[WS2812_COUNT][3], current[WS2812_COUNT][3];
 static uint32_t   orig_step;
 static absolute_time_t next_step, next_blink, next_push;
 static bool       blink;
+static scene_out_t last_scene;
+static bool       have_scene;
 
-static const char *names[LEDMODE_COUNT] = { "ORIGINAL", "AMBIENT", "OFF" };
+bool ambient_last_scene(scene_out_t *out) {
+    scenes_lock();                                // don't copy while the timer is writing it
+    bool ok = have_scene;
+    if (ok) *out = last_scene;
+    scenes_unlock();
+    return ok;
+}
+
+// SCENES mode runs from a 50 Hz timer interrupt rather than the main loop, so the ring keeps
+// animating smoothly while the GIF decoder holds the main loop for a whole frame. The timer
+// only touches the ring LEDs (never GP18), skips a tick while the main loop holds
+// scenes_lock(), and stays quiet until ambient_scenes_live(true) (after the boot splash,
+// which drives the LEDs itself).
+static repeating_timer_t scene_timer;
+static volatile bool     scenes_live;
+
+static bool scene_tick(repeating_timer_t *rt) {
+    (void)rt;
+    if (!scenes_live || mode != LEDMODE_SCENE || scenes_busy()) return true;
+    scene_out_t o;
+    scenes_render(to_ms_since_boot(get_absolute_time()), &o);
+    last_scene = o; have_scene = true;
+    leds_set_brightness(255);                     // scenes apply brightness themselves
+    for (int i = 0; i < WS2812_COUNT; i++) leds_set(i, o.rgb[i][0], o.rgb[i][1], o.rgb[i][2]);
+    leds_show();
+    return true;
+}
+
+void ambient_scenes_live(bool on) {
+    static bool started;
+    scenes_live = on;
+    if (on && !started) started = add_repeating_timer_ms(-20, scene_tick, NULL, &scene_timer);
+}
+
+static const char *names[LEDMODE_COUNT] = { "ORIGINAL", "AMBIENT", "OFF", "SCENES" };
 const char *ambient_mode_name(led_mode_t m) { return m < LEDMODE_COUNT ? names[m] : "?"; }
 led_mode_t ambient_mode(void) { return mode; }
+led_mode_t ambient_next_mode(led_mode_t m) {
+    switch (m) {
+    case LEDMODE_ORIGINAL: return LEDMODE_AMBIENT;
+    case LEDMODE_AMBIENT:  return LEDMODE_SCENE;
+    case LEDMODE_SCENE:    return LEDMODE_OFF;
+    default:               return LEDMODE_ORIGINAL;
+    }
+}
 bool ambient_clockwise(void) { return clockwise; }
 void ambient_toggle_direction(void) { clockwise = !clockwise; }
 void ambient_set_clockwise(bool cw) { clockwise = cw; }
@@ -49,10 +94,12 @@ void ambient_init(void) {
 }
 
 void ambient_set_mode(led_mode_t m) {
+    scenes_lock();                                // the scene timer must not write mid-change
     mode = m;
     leds_fill(0, 0, 0);
     leds_set_brightness(255);
     leds_show();
+    scenes_unlock();
     status_led(false);
     for (int i = 0; i < WS2812_COUNT; i++)
         for (int c = 0; c < 3; c++) current[i][c] = target[i][c] = 0;
@@ -155,6 +202,8 @@ void ambient_tick(void) {
         blink = !blink;
         status_led(blink);
     }
+
+    if (mode == LEDMODE_SCENE) return;                 // drawn by scene_tick() (timer)
 
     if (mode == LEDMODE_ORIGINAL) {
         if (!time_reached(next_step)) return;

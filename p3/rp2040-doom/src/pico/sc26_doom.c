@@ -49,14 +49,41 @@ static uint32_t crc32(const uint8_t *p, size_t n) {
     return ~c;
 }
 
+// LED-scenes record written by SC26 OS at offset 512 of the same sector (fw/gifplayer/settings.c).
+// When DOOM is started in SCENES mode, SC26 OS records the scene as a short seamless loop right
+// after it: u16 interval_ms, u16 n, n x 27 bytes (physical LED order, ready to send), then a
+// crc of the loop. Playing it back needs no floating point, which this build doesn't have.
+#define SC26_SCENES_MAGIC 0x454E4353u            // "SCNE"
+typedef struct { char scene[24]; uint8_t speed, bright; uint16_t blob_len; } os_scene_rec_t;
+typedef struct { uint32_t magic, version; os_scene_rec_t r; uint32_t crc; } os_stored_scene_t;
+static const uint8_t *scene_loop;               // frames, read straight from flash
+static uint32_t scene_iv, scene_n;
+
+static void read_os_scene(const uint8_t *sector) {
+    const os_stored_scene_t *sc = (const os_stored_scene_t *)(sector + 512);
+    if (sc->magic != SC26_SCENES_MAGIC || sc->version != 1 ||
+        sc->crc != crc32((const uint8_t *)&sc->r, sizeof sc->r)) return;
+    uint32_t len = sc->r.blob_len;
+    if (len < 4 || 512 + sizeof *sc + len + 4 > 4096) return;
+    const uint8_t *blob = sector + 512 + sizeof *sc;
+    uint32_t bc;
+    memcpy(&bc, blob + len, 4);
+    if (bc != crc32(blob, len)) return;
+    uint32_t iv = blob[0] | blob[1] << 8, n = blob[2] | blob[3] << 8;
+    if (iv < 10 || n < 2 || 4 + n * WS2812_COUNT * 3 > len) return;
+    scene_iv = iv; scene_n = n; scene_loop = blob + 4;
+}
+
 static void read_os_settings(void) {
     const os_stored_t *st = (const os_stored_t *)(XIP_NOCACHE_NOALLOC_NOTRANSLATE_BASE + SC26_SETTINGS_PHYS);
     if (st->magic == 0x53433236u && st->version == 1 && st->crc == crc32((const uint8_t *)&st->s, sizeof st->s)) {
         os_brightness = (st->s.brightness >= 10 && st->s.brightness <= 100) ? st->s.brightness : 100;
         os_led_mode = st->s.led_mode;
         os_ring_cw = st->s.ring_cw;
+        read_os_scene((const uint8_t *)st);   // the LED scene loop, if any
     }
 }
+
 
 // ------------------------------------------------------------------ flash slot / address translation
 static uint32_t slot_base;
@@ -259,8 +286,32 @@ void sc26_set_led_target(int k, uint8_t r, uint8_t g, uint8_t b) {
     led_tgt[i][0] = r; led_tgt[i][1] = g; led_tgt[i][2] = b;
 }
 
+// The ring follows the LED mode chosen in SC26 OS: 0 original sweep, 1 ambient (follows the
+// screen), 2 off, 3 scene (the recorded loop; ambient if there is none). Called once per frame
+// by the video code.
 void sc26_leds_update(void) {
     if (os_led_mode == 2) return;                    // LEDs off in SC26 OS -> off here too
+    uint32_t ms = time_us_32() / 1000;
+    if (os_led_mode == 3 && scene_loop) {            // the scene recorded by SC26 OS
+        uint32_t pos = ms % (scene_iv * scene_n);
+        uint32_t i = pos / scene_iv, f = (pos % scene_iv) * 256 / scene_iv;   // blend 0..255
+        const uint8_t *a = scene_loop + i * (WS2812_COUNT * 3);
+        const uint8_t *b = scene_loop + ((i + 1) % scene_n) * (WS2812_COUNT * 3);
+        for (int k = 0; k < WS2812_COUNT * 3; k++)
+            led_cur[k / 3][k % 3] = (int16_t)((a[k] * (256 - f) + b[k] * f) >> 8);
+        leds_push();
+        return;
+    }
+    if (os_led_mode == 0) {                          // the stock badge's purple sweep, 170 ms steps
+        static const uint16_t masks[5] = { 0x080, 0x140, 0x021, 0x012, 0x00C };
+        uint16_t m = masks[(ms / 170) % 5];
+        for (int i = 0; i < WS2812_COUNT; i++) {
+            int16_t v = (m >> i) & 1 ? 16 : 0;
+            led_cur[i][0] = v; led_cur[i][1] = 0; led_cur[i][2] = v;
+        }
+        leds_push();
+        return;
+    }
     for (int i = 0; i < WS2812_COUNT; i++)
         for (int c = 0; c < 3; c++) {
             led_cur[i][c] += (int16_t)((led_tgt[i][c] - led_cur[i][c]) * 3 / 8);
