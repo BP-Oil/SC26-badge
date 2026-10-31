@@ -11,7 +11,10 @@ the same timeline with the same maths the firmware uses (boot_splash.c).
 """
 import io, math, random, sys
 import numpy as np
-import cairosvg
+try:
+    import cairosvg                                  # only needed for SVG input
+except ImportError:
+    cairosvg = None
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 W = H = 360
@@ -22,6 +25,10 @@ ORANGE = (249, 110, 42)          # from the artwork's palette
 
 
 def render_svg(path, height):
+    if path.lower().endswith(".png"):                # pre-rendered art, e.g. tools/make_skeletons.py
+        im = Image.open(path).convert("RGBA")
+        im = im.crop(im.getbbox())
+        return im.resize((max(1, round(im.width * height / im.height)), height), Image.LANCZOS)
     png = cairosvg.svg2png(url=path, output_height=height)
     im = Image.open(io.BytesIO(png)).convert("RGBA")
     return im.crop(im.getbbox())
