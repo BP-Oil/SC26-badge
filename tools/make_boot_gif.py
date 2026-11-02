@@ -54,7 +54,7 @@ def bios_frames():
         return fb
 
     out.append((np.zeros((H, W, 3), np.float32), 300))
-    for s, ms in [("SC26 v2.0 by BP  (c) 2026", 140), ("", 0), ("CPU : RP2350 @ 150 MHz", 140)]:
+    for s, ms in [("SC26 v2.1 by BP  (c) 2026", 140), ("", 0), ("CPU : RP2350 @ 150 MHz", 140)]:
         lines.append(s)
         out.append((frame(), max(ms, 40)))
     for kb in range(0, 521, 40):
@@ -137,7 +137,7 @@ def main():
     ap.add_argument("--lossy", type=int, default=40)
     a = ap.parse_args()
     sprites = [A.quantise(im) for im in (A.add_glow(A.render_svg(a.char_svg, 166)), A.add_glow(A.render_svg(a.astro_svg, 170)),
-                                          A.text_sprite(), A.small_text_sprite("v2.0   by BP"))]
+                                          A.text_sprite(), A.small_text_sprite("v2.1   by BP"))]
     frames = bios_frames() + splash_frames(sprites, a.fps) + [(np.zeros((H, W, 3), np.float32), 600)]
     imgs = [Image.fromarray(fb.clip(0, 255).astype(np.uint8)) for fb, _ in frames]
     durs = [d for _, d in frames]

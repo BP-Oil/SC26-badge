@@ -1,10 +1,11 @@
-# SC26 OS v2.0 by BP
+# SC26 OS v2.1 by BP
 
 Custom firmware for the **SAINTCON 2026 rocket badge** (RP2350, round 360×360 screen, 9 LEDs, 7 buttons).
 
 - **Animated GIF player.** Drop GIFs on the badge's USB drive and they play. The LEDs can copy the colours at the edge of the picture.
 - **Boot screen.** A BIOS-style self-test, then an astronaut splash.
 - **NES emulator.** Add your own `.nes` games.
+- **2 PLAYER over USB-C.** Link two badges with one cable and play NES games together.
 - **DOOM engine.** Add your own WAD (see below).
 - **Original badge firmware**, still available from the menu.
 - **On-screen help.** Menu → HOW TO USE.
@@ -48,7 +49,7 @@ For later updates, do the same with `sc26_os_update.uf2`.
 | Joystick | D-pad | Up / Down, Left / Right | walk, turn |
 | A / B | A / B | A / B | fire / use, open |
 | CENTER | START | CENTER | game menu |
-| CENTER + Down | SELECT | hold CENTER + Left/Right, Up, Down, B | strafe, next weapon, map, run |
+| CENTER + B | SELECT | hold CENTER + Left/Right, Up, Down, B | strafe, next weapon, map, run |
 | hold CENTER | back to the menu | hold CENTER (2 s) | quit to SC26 OS |
 
 There's no speaker on the badge, so games are silent.
@@ -61,12 +62,27 @@ Plug the badge in and copy `.gif` files onto the **SC26 GIFS** drive. Playback p
 
 Copy `.nes` files (iNES format, up to 504 KB) into the **GAMES** folder on the drive, then pick them from the menu. Most US games work (mappers 0–4, 7 and many more). Only use games you own.
 
+### 2 PLAYER (two badges, one USB-C cable)
+
+Play NES games together, for example Contra in co-op:
+
+1. **Connect the two badges** with a USB-C to USB-C data cable. Both run on battery; neither is plugged into a computer.
+2. **Open 2 PLAYER on both:** Menu → **2 PLAYER (USB-C)**.
+3. **Pick Player 1.** On that badge, press **A**. It restarts as the USB host and lists its GAMES folder. Both screens then show **LINKED TO** plus the other badge's ID.
+4. **Start a game.** Player 1 picks one and both badges start it together. Player 1 is controller 1 and Player 2 is controller 2. In Contra, pick **2 PLAYERS** on the title screen with SELECT (CENTER + B).
+
+If Player 2 doesn't have the game, Player 1 sends it over the cable and Player 2 keeps a copy in GAMES.
+
+Hold **CENTER** on either badge to end the game for both. **B** leaves the 2 PLAYER screen; Player 1 restarts into the normal menu.
+
+Both badges run the emulator in lockstep: every frame they swap button presses, which adds about 1/30 s of input delay. A memory check every couple of seconds shows **DESYNC** if they ever drift apart.
+
 ### Adding DOOM
 
-The engine is installed, but no game data is included. **DOOM** appears in the menu once you add a WAD you own. Ultimate/registered DOOM, DOOM II, or the free shareware `DOOM1.WAD` all work.
+The engine is installed, but no game data is included. **DOOM** appears in the menu once you add a WAD you own: registered DOOM (v1.9) or the free shareware `DOOM1.WAD`. The converted file has to fit in 6 MB.
 
 1. Build `whd_gen` from [rp2040-doom](https://github.com/kilograham/rp2040-doom). It's a normal native CMake build, and the tool ends up at `src/whd_gen/whd_gen`.
-2. Convert your WAD: `whd_gen DOOM.WAD doom.whd -no-super-tiny`. The result must be under 6 MB, which the registered DOOM.WAD is.
+2. Convert your WAD: `whd_gen DOOM.WAD doom.whd -no-super-tiny`. Registered DOOM comes out at about 5.7 MB.
 3. Make an installer: `python3 tools/make_combined_uf2.py doom_data.uf2 --whd doom.whd`.
 4. Put the badge in update mode and drag `doom_data.uf2` onto it. Everything else on the badge stays.
 
@@ -114,7 +130,7 @@ ninja doom_tiny_nost
 
 ## Credits and licences
 
-**SC26 OS v2.0 by BP.**
+**SC26 OS v2.1 by BP.**
 
 It's built on:
 

@@ -82,7 +82,7 @@ void bios_begin(void) {
     sleep_ms(140);
     leds_fill(0, 0, 0); leds_show(); status_led(false);
 
-    bios_print("SC26 v2.0 by BP  (c) 2026", 140);
+    bios_print("SC26 v2.1 by BP  (c) 2026", 140);
     bios_print("", 0);
     bios_printf_pause(140, "CPU : RP2350 @ %lu MHz", (unsigned long)(clock_get_hz(clk_sys) / 1000000));
     // memory count-up

@@ -39,6 +39,8 @@
 #include "chain.h"
 #include "boot_splash.h"
 #include "help.h"
+#include "linktest.h"
+#include "twoplayer.h"
 #include "leds.h"
 #include "hardware/watchdog.h"
 #include "hardware/structs/watchdog.h"
@@ -154,7 +156,7 @@ static const char GAMES_README[] =
     "Drop NES games (.nes, iNES format, up to 504 KB) into this folder.\r\n"
     "Hold CENTER on the board to open the menu and pick a game.\r\n\r\n"
     "In game: joystick = D-pad, A = A, B = B, tap CENTER = START,\r\n"
-    "CENTER + DOWN = SELECT, hold CENTER 1.5 s = back to the menu.\r\n"
+    "CENTER + B = SELECT, hold CENTER 1.5 s = back to the menu.\r\n"
     "Only use ROMs you own.\r\n";
 
 static bool fs_mount_or_format(void) {
@@ -333,7 +335,7 @@ static uint32_t swallow;             // buttons still held from the menu: ignore
 static int      help_page;
 
 // ------------------------------------------------------------------ menu
-typedef enum { MI_GIFS, MI_HELP, MI_NES, MI_DOOM, MI_ORIG, MI_UPDATE } mi_kind_t;
+typedef enum { MI_GIFS, MI_HELP, MI_2P, MI_NES, MI_DOOM, MI_ORIG, MI_LINK, MI_UPDATE } mi_kind_t;
 typedef struct { mi_kind_t kind; char label[30]; char path[NAME_LEN + 8]; } mitem_t;
 static mitem_t mitems[MAX_FILES + 5];
 static int     mcount, msel, mtop;
@@ -363,6 +365,7 @@ static void menu_build(void) {
     mcount = 0;
     menu_add(MI_GIFS, "GIF PLAYER", NULL);
     menu_add(MI_HELP, "HOW TO USE", NULL);
+    menu_add(MI_2P, "2 PLAYER (USB-C)", NULL);
     int first_game = mcount;
     DIR dir; FILINFO fi;
     if (fs_mounted && f_opendir(&dir, "GAMES") == FR_OK) {
@@ -466,6 +469,18 @@ static void menu_launch(const mitem_t *it) {
         screen_message("CAN'T START", it->label, err, RGB565(255, 90, 60));
         sleep_ms(2500); menu_draw();
         return; }
+    case MI_2P:
+        twoplayer_p2_run();
+        ambient_set_mode(ambient_mode());
+        btn_prev = buttons_read();
+        menu_draw();
+        return;
+    case MI_LINK:
+        linktest_run(tud_task);
+        ambient_set_mode(ambient_mode());       // hand the LEDs back
+        btn_prev = buttons_read();
+        menu_draw();
+        return;
     case MI_UPDATE:
         screen_message("UPDATE MODE", "Board is now the RP2350 drive", "drop a .uf2 on it", COL_ACC);
         sleep_ms(300);
@@ -685,7 +700,7 @@ static void write_sysinfo(void) {
         { "DOOM    ", DOOM_OFFSET, 0x40900 },
         { "DOOMWHD ", DOOM_WHD_OFFSET, 0x5b3100 },
     };
-    char buf[400]; int n = snprintf(buf, sizeof buf, "SC26 OS v2.0 install check (CRC32 of each flash slot)\r\n");
+    char buf[400]; int n = snprintf(buf, sizeof buf, "SC26 OS v2.1 install check (CRC32 of each flash slot)\r\n");
     for (size_t i = 0; i < sizeof slots / sizeof slots[0]; i++)
         n += snprintf(buf + n, sizeof buf - (size_t)n, "%s 0x%06lx +0x%06lx  %08lx\r\n", slots[i].name,
                       (unsigned long)slots[i].off, (unsigned long)slots[i].len, (unsigned long)flash_crc(slots[i].off, slots[i].len));
@@ -700,7 +715,29 @@ static void service(void) {
     ambient_tick();
 }
 
+// PLAYER 1 of a USB LINK: the badge was restarted to run its USB port as a host. Skip the
+// normal OS (no USB drive in this mode) and go back to it with a restart when done.
+static void usb_host_link_boot(void) {
+    settings_t cfg;
+    bool have_cfg = settings_load(&cfg);
+    buttons_init();
+    lcd_init_ex(1.0f);
+    lcd_backlight(have_cfg && cfg.brightness >= 10 && cfg.brightness <= 100 ? cfg.brightness : 100);
+    ambient_init();
+    ambient_set_mode(have_cfg && cfg.led_mode < LEDMODE_COUNT ? (led_mode_t)cfg.led_mode : LEDMODE_ORIGINAL);
+    ambient_set_clockwise(have_cfg ? cfg.ring_cw : false);
+    tusb_rhport_init_t host = { .role = TUSB_ROLE_HOST, .speed = TUSB_SPEED_FULL };
+    tusb_rhport_init(0, &host);
+    fs_mount_or_format();                   // PLAYER 1 picks games from its GAMES folder
+    twoplayer_p1_run();
+    flashdisk_flush();
+    sleep_ms(300);
+    watchdog_reboot(0, 0, 10);
+    while (true) tight_loop_contents();
+}
+
 int main(void) {
+    if (watchdog_hw->scratch[0] == LINKTEST_HOST_MAGIC) { watchdog_hw->scratch[0] = 0; usb_host_link_boot(); }
     doom_diag_capture();
     watchdog_disable();                     // DOOM runs with a watchdog; don't let it follow us here
     settings_t cfg;

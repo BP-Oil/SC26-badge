@@ -45,6 +45,8 @@ add_executable(sc26_gif
     gifplayer/chain.c
     gifplayer/boot_splash.c
     gifplayer/help.c
+    gifplayer/linktest.c
+    gifplayer/twoplayer.c
     nes/nes_platform.cpp
     lib/infones/InfoNES.cpp
     lib/infones/InfoNES_Mapper.cpp
@@ -64,9 +66,9 @@ target_compile_definitions(sc26_gif PRIVATE MAX_WIDTH=1024)   # widest GIF the d
 target_compile_options(sc26_gif PRIVATE -O2)
 set_source_files_properties(gifplayer/gif_player.c PROPERTIES COMPILE_OPTIONS "-O3;-Wno-unused-function;-Wno-unused-variable")
 target_link_libraries(sc26_gif sc26_board
-    tinyusb_device tinyusb_board pico_unique_id pico_bootrom hardware_flash hardware_sync m)
+    tinyusb_device tinyusb_host tinyusb_board pico_unique_id pico_bootrom hardware_flash hardware_sync m)
 pico_enable_stdio_usb(sc26_gif 0)
 pico_enable_stdio_uart(sc26_gif 0)
 pico_set_program_name(sc26_gif "SC26 OS")
-pico_set_program_version(sc26_gif "2.0")
+pico_set_program_version(sc26_gif "2.1")
 pico_add_extra_outputs(sc26_gif)

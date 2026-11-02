@@ -24,6 +24,8 @@ def L(kind, **kw):
 
 cur_pc = [0]
 regs = collections.defaultdict(int)      # canonical peripheral register file
+if os.environ.get("SCRATCH0"):            # preset watchdog scratch 0 (as left by a previous boot)
+    regs[0x400d800c] = int(os.environ["SCRATCH0"], 16)
 sio = dict(out=0, oe=0, hi_out=0, hi_oe=0)
 gpio_in = 0xFFFFFFFF                       # all inputs high (buttons released, pull-ups)
 fifo = collections.deque()
@@ -77,8 +79,9 @@ def periph_read(addr, size):
         if off in (0x24, 0x08): return now_us[0] >> 32
         if off == 0x20: return 0
     if name in ("UART0", "UART1"):
-        if off == 0x18: return 0x90
-        if off == 0x00: return 0
+        q = uart_rx.setdefault(name, [])
+        if off == 0x18: return 0x80 | (0 if q else 0x10)     # TXFE, RXFE unless loopback data waits
+        if off == 0x00: return q.pop(0) if q else 0
     if name in ("SPI0", "SPI1"):
         if off == 0x0C: return 0x3 | (4 if spi_rx[name] else 0)
         if off == 0x08:
@@ -138,6 +141,8 @@ def periph_write(addr, size, value):
     elif name in ("UART0", "UART1"):
         if off == 0:
             L("UART_TX", uart=name, ch=value & 0xFF)
+            if os.environ.get("UART_LOOPBACK"):               # TX wired to RX
+                uart_rx.setdefault(name, []).append(value & 0xFF)
         else:
             L("UART_REG", uart=name, off=hex(off), val=hex(new))
     elif name.startswith("PIO"):
@@ -282,6 +287,7 @@ except Exception as e: print("fpu enable:", e)
 mu.mem_map(FLASH, 0x1000000)
 mu.mem_write(FLASH, FW)
 flash_ops = [0, 0]
+uart_rx = {}
 FS_OFF = int(os.environ.get("FS_OFF", "0x400000"), 16)
 # BUTTONS="t:pin:down,..." e.g. "2.0:20:1,3.6:20:0" holds CENTER (GP20) from 2.0 s to 3.6 s (emulated time)
 button_events = sorted([(float(t), int(p), int(v)) for t, p, v in

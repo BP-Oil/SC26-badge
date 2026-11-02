@@ -109,6 +109,8 @@ void usb_glue_init(void) {
     stdio_set_driver_enabled(&cdc_stdio, true);
 }
 
+void usb_console(bool on) { stdio_set_driver_enabled(&cdc_stdio, on); }
+
 void usb_reboot_to_bootsel(void) {
     flashdisk_flush();
     reset_usb_boot(0, 0);

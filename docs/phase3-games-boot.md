@@ -1,4 +1,4 @@
-# SC26 OS v2.0: boot screen, games, DOOM (Phase 3)
+# SC26 OS v2.1: boot screen, games, DOOM, 2 PLAYER
 
 ## What's on the badge (16 MB flash)
 
@@ -18,8 +18,8 @@
 
 At power-up:
 
-1. **BIOS POST.** The LED ring flashes once like a PC self-test. The header reads **SC26 v2.0 by BP  (c) 2026**. Then live system info scrolls up: CPU clock, a memory count-up, flash size, the drive size, and how many GIFs and games were found.
-2. **Splash** (~6 s). Your two astronauts drift in over a twinkling starfield: one tumbles in from the top-left, the other rises from below and gives a thumbs-up. Then the **SC26 OS** title fades in, with **v2.0 by BP** under it, above a blue marching-blocks loader bar, which is mirrored as a comet running around the LED ring. A shooting star crosses at about 3 s.
+1. **BIOS POST.** The LED ring flashes once like a PC self-test. The header reads **SC26 v2.1 by BP  (c) 2026**. Then live system info scrolls up: CPU clock, a memory count-up, flash size, the drive size, and how many GIFs and games were found.
+2. **Splash** (~6 s). Your two astronauts drift in over a twinkling starfield: one tumbles in from the top-left, the other rises from below and gives a thumbs-up. Then the **SC26 OS** title fades in, with **v2.1 by BP** under it, above a blue marching-blocks loader bar, which is mirrored as a comet running around the LED ring. A shooting star crosses at about 3 s.
 3. The GIF player starts, with a 5 s hint at the bottom: **HOLD CENTER: MENU/HELP**. **Any button skips** the BIOS or the splash.
 
 The splash is drawn live every frame: the sprites are rotated and scaled with bilinear filtering and alpha-blended, not played back from a video. The artwork lives in `tools/make_boot_assets.py` → `fw/gifplayer/boot_assets.h` (~60 KB). To change it, rerun:
@@ -70,7 +70,7 @@ Button names sit in dark "chips". Amber **hold** means keep the button pressed. 
 | Joystick | D-pad |
 | A / B | A / B |
 | Tap CENTER | START |
-| CENTER + DOWN | SELECT |
+| CENTER + B (or CENTER + DOWN) | SELECT |
 | Hold CENTER 1.5 s | back to the menu |
 
 **LEDs:** the ring follows the colours at the edge of the game picture (ambient) unless the LED mode is OFF. There is no sound, because the badge has no speaker.
@@ -103,7 +103,7 @@ Button names sit in dark "chips". Amber **hold** means keep the button pressed. 
 
 ## Release package
 
-`tools/make_release.py` builds the downloadable `SC26-OS-v2.0.zip` (see the docstring for the full command). It contains:
+`tools/make_release.py` builds the downloadable `SC26-OS-v2.1.zip` (see the docstring for the full command). It contains:
 
 - the full install, the OS update and the stock-firmware restore UF2s
 - `README.md` (from `docs/PUBLIC_README.md`, or another file given with `--readme`)

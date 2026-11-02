@@ -23,3 +23,15 @@
 
 // One flash sector per MSC transfer chunk -> fewer, larger write callbacks
 #define CFG_TUD_MSC_EP_BUFSIZE  4096
+
+// Host role, used only by the USB LINK "PLAYER 1" mode (port 0 is restarted as a host; the
+// other badge shows up as a USB serial device). The normal boot still starts as a device.
+#define CFG_TUH_ENABLED                   1
+#define CFG_TUH_MAX_SPEED                 OPT_MODE_FULL_SPEED
+#define CFG_TUH_DEVICE_MAX                1
+#define CFG_TUH_HUB                       0
+#define CFG_TUH_CDC                       1
+#define CFG_TUH_ENUMERATION_BUFSIZE       256
+#define CFG_TUH_CDC_LINE_CONTROL_ON_ENUM  0x03   // DTR | RTS. Must be a plain number: TinyUSB tests it with #if
+#define CFG_TUH_CDC_RX_BUFSIZE            256
+#define CFG_TUH_CDC_TX_BUFSIZE            256

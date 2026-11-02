@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the downloadable SC26 OS release: install/update UF2s, README, licences, source, zip.
 
-  python3 tools/make_release.py --out release --version 2.0 \\
+  python3 tools/make_release.py --out release --version 2.1 \\
       --os fw/build/sc26_gif.bin --orig wayfarer.bin \\
       --doom p3/rp2040-doom/build_sc26/src/doom_tiny_nost.bin \\
       --restore original_wayfarer_restore.uf2 --boot-gif out/sc26_boot.gif
@@ -41,7 +41,7 @@ def build_drive(img, boot_gif, roms):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
-    ap.add_argument("--version", default="2.0")
+    ap.add_argument("--version", default="2.1")
     for k in ("os", "orig", "doom", "whd", "restore", "src", "boot-gif"):
         ap.add_argument("--" + k)
     ap.add_argument("--rom", action="append", default=[])

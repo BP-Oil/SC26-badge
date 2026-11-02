@@ -67,3 +67,86 @@ const uint8_t *nescache_load(const char *path, char *err, size_t errlen, nescach
     if (vcrc != crc) { snprintf(err, errlen, "FLASH VERIFY FAILED"); return NULL; }
     return (const uint8_t *)(XIP_BASE + DATA_OFFSET);
 }
+
+// ---------------------------------------------------------------- 2-player helpers
+// The currently cached ROM (pointer, size, CRC), as written by nescache_load / nescache_rx_end.
+const uint8_t *nescache_current(uint32_t *size, uint32_t *crc) {
+    const hdr_t *cur = (const hdr_t *)(XIP_BASE + NESCACHE_OFFSET);
+    if (cur->magic != CACHE_MAGIC) return NULL;
+    if (size) *size = cur->size;
+    if (crc) *crc = cur->crc;
+    return (const uint8_t *)(XIP_BASE + DATA_OFFSET);
+}
+
+// CRC32 + size of a file on the drive (0 if it can't be read).
+uint32_t nescache_file_crc(const char *path, uint32_t *size) {
+    FIL f; UINT br; uint32_t crc = 0;
+    if (f_open(&f, path, FA_READ) != FR_OK) return 0;
+    if (size) *size = (uint32_t)f_size(&f);
+    while (f_read(&f, sector, sizeof sector, &br) == FR_OK && br) crc = crc32_update(crc, sector, br);
+    f_close(&f);
+    return crc;
+}
+
+// Receive a ROM straight into the cache slot (PLAYER 2 getting a game it doesn't have).
+// Data must arrive in order; each full 4 KB sector is programmed as soon as it is complete.
+static uint32_t rx_size, rx_crc, rx_got;
+static bool rx_ok;
+
+bool nescache_rx_begin(uint32_t size, uint32_t crc) {
+    rx_ok = size >= 16 && size <= MAX_ROM;
+    if (!rx_ok) return false;
+    rx_size = size; rx_crc = crc; rx_got = 0;
+    memset(sector, 0xFF, sizeof sector);
+    flash_sector(NESCACHE_OFFSET, sector);                     // no valid header until the end
+    return true;
+}
+
+bool nescache_rx_data(const uint8_t *d, uint32_t n) {
+    while (rx_ok && n) {
+        if (rx_got >= rx_size) { rx_ok = false; break; }
+        uint32_t in_sec = rx_got % FLASH_SECTOR_SIZE;
+        uint32_t take = FLASH_SECTOR_SIZE - in_sec;
+        if (take > n) take = n;
+        if (take > rx_size - rx_got) take = rx_size - rx_got;
+        memcpy(sector + in_sec, d, take);
+        rx_got += take; d += take; n -= take;
+        if (rx_got % FLASH_SECTOR_SIZE == 0 || rx_got == rx_size) {
+            flash_sector(DATA_OFFSET + (rx_got - 1) / FLASH_SECTOR_SIZE * FLASH_SECTOR_SIZE, sector);
+            memset(sector, 0xFF, sizeof sector);
+        }
+    }
+    return rx_ok;
+}
+
+uint32_t nescache_rx_progress(void) { return rx_size ? rx_got * 100 / rx_size : 0; }
+
+const uint8_t *nescache_rx_end(const char *name, char *err, size_t errlen) {
+    if (!rx_ok || rx_got != rx_size) { snprintf(err, errlen, "TRANSFER INCOMPLETE"); return NULL; }
+    uint32_t vcrc = crc32_update(0, (const uint8_t *)(XIP_BASE + DATA_OFFSET), rx_size);
+    if (vcrc != rx_crc) { snprintf(err, errlen, "ROM CRC MISMATCH"); return NULL; }
+    memset(sector, 0xFF, sizeof sector);
+    hdr_t h = { CACHE_MAGIC, rx_size, rx_crc, {0} };
+    snprintf(h.name, sizeof h.name, "%s", name);
+    memcpy(sector, &h, sizeof h);
+    flash_sector(NESCACHE_OFFSET, sector);
+    return (const uint8_t *)(XIP_BASE + DATA_OFFSET);
+}
+
+// Copy the cached ROM into a file on the drive (so PLAYER 2 keeps the game it was sent).
+bool nescache_save_to(const char *path) {
+    uint32_t size = 0;
+    const uint8_t *rom = nescache_current(&size, NULL);
+    if (!rom) return false;
+    FIL f; UINT bw;
+    if (f_open(&f, path, FA_CREATE_NEW | FA_WRITE) != FR_OK) return false;
+    bool ok = true;
+    for (uint32_t off = 0; off < size && ok; off += sizeof sector) {
+        uint32_t n = size - off < sizeof sector ? size - off : sizeof sector;
+        memcpy(sector, rom + off, n);                           // via RAM: flash writes can't read XIP
+        ok = f_write(&f, sector, n, &bw) == FR_OK && bw == n;
+    }
+    f_close(&f);
+    if (!ok) f_unlink(path);
+    return ok;
+}
